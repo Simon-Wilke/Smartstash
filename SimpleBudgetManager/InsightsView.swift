@@ -1,0 +1,2274 @@
+import SwiftUI
+import Charts
+
+// MARK: - Color Theme
+struct AppTheme {
+    static let primary = Color(hex: "#5771FF")    // Vibrant indigo blue
+    static let secondary = Color(hex: "FFB144")  // Warm orange
+    static let accent = Color(hex: "FF7676")     // Soft red
+    static let background = Color(hex: "F9F9FD") // Light gray with blue tint
+    static let cardBg = Color.white
+    static let textPrimary = Color(hex: "2A2B55") // Dark blue-gray
+    static let textSecondary = Color(hex: "9292A0") // Medium gray
+    
+    // Gradient backgrounds
+    static let primaryGradient = LinearGradient(
+        colors: [primary, primary.opacity(0.8)],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+    
+    static let secondaryGradient = LinearGradient(
+        colors: [secondary, secondary.opacity(0.8)],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+    
+    static let incomeColor = Color(hex: "25C685") // Green
+    static let expenseColor = Color(hex: "FF7676") // Red
+}
+
+
+extension Date {
+    func isSameDay(as other: Date) -> Bool {
+        let calendar = Calendar.current
+        return calendar.isDate(self, inSameDayAs: other)
+    }
+    
+    func formattedDay() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE"
+        return formatter.string(from: self)
+    }
+    
+    func formattedDate() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter.string(from: self)
+    }
+}
+
+// MARK: - View Models
+struct SummaryButton: Identifiable {
+    enum ButtonType {
+        case weekly, monthly, yearly
+    }
+    
+    let id: Int
+    let type: ButtonType
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let gradient: LinearGradient
+}
+
+struct FinancialStory: Identifiable, Codable {
+    var id = UUID()
+    let title: String
+    let value: String
+    let change: String
+    let isPositive: Bool
+    let emoji: String
+    
+    // Store color as hex string instead of Color directly
+    private var colorHex: String
+    
+    // Use a computed property for the Color
+    var backgroundColor: Color {
+        get { Color(hex: colorHex) }
+        set { colorHex = newValue.toHex() ?? "#5771FF" } // Default to primary if conversion fails
+    }
+    
+    // Coding keys that include the hex string
+    private enum CodingKeys: String, CodingKey {
+        case id, title, value, change, isPositive, emoji, colorHex
+    }
+    
+    // Regular initializer that takes a Color
+    init(title: String, value: String, change: String, isPositive: Bool, emoji: String, backgroundColor: Color) {
+        self.title = title
+        self.value = value
+        self.change = change
+        self.isPositive = isPositive
+        self.emoji = emoji
+        self.colorHex = backgroundColor.toHex() ?? "#5771FF" // Convert color to hex
+    }
+    
+    // Decoder initializer
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        value = try container.decode(String.self, forKey: .value)
+        change = try container.decode(String.self, forKey: .change)
+        isPositive = try container.decode(Bool.self, forKey: .isPositive)
+        emoji = try container.decode(String.self, forKey: .emoji)
+        colorHex = try container.decode(String.self, forKey: .colorHex)
+    }
+    
+    // Encoder
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(value, forKey: .value)
+        try container.encode(change, forKey: .change)
+        try container.encode(isPositive, forKey: .isPositive)
+        try container.encode(emoji, forKey: .emoji)
+        try container.encode(colorHex, forKey: .colorHex)
+    }
+}
+
+// 2. Add Color extension for hex conversion if you don't already have it
+extension Color {
+    // Convert Color to hex string
+    func toHex() -> String? {
+        let uiColor = UIColor(self)
+        
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        
+        guard uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return nil
+        }
+        
+        let hexString = String(
+            format: "#%02X%02X%02X",
+            Int(red * 255),
+            Int(green * 255),
+            Int(blue * 255)
+        )
+        
+        return hexString
+    }
+    
+  
+}
+
+import SwiftUI
+import Charts
+
+struct InsightsView: View {
+    @ObservedObject var viewModel: BudgetViewModel
+    @StateObject private var storyManager = StoryManager()
+    @State private var showingWeeklyStory = false
+    @State private var showingMonthlyStory = false
+    @State private var selectedTimeframe: Timeframe = .week
+    @State private var animateChart = false
+    @State private var animateCategoryChart = false
+    @Environment(\.colorScheme) private var colorScheme
+    
+    enum Timeframe: String, CaseIterable {
+        case week = "Week"
+        case month = "Month"
+        case year = "Year"
+    }
+    
+    // Dynamic data based on selected timeframe
+    var balanceData: [(day: String, date: String, balance: Double)] {
+        switch selectedTimeframe {
+        case .week:
+            return getWeekData()
+        case .month:
+            return getMonthData()
+        case .year:
+            return getYearData()
+        }
+    }
+    
+    // Dynamic category breakdown based on timeframe
+    var categoryBreakdown: [(category: String, amount: Double, icon: String, percentage: Double)] {
+        let calendar = Calendar.current
+        let today = Date()
+        
+        // Filter transactions based on timeframe
+        let filteredExpenses: [Transaction]
+        
+        switch selectedTimeframe {
+        case .week:
+            let oneWeekAgo = calendar.date(byAdding: .day, value: -7, to: today)!
+            filteredExpenses = viewModel.transactions.filter {
+                $0.type == .expense && $0.date >= oneWeekAgo
+            }
+        case .month:
+            let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
+            filteredExpenses = viewModel.transactions.filter {
+                $0.type == .expense && $0.date >= startOfMonth
+            }
+        case .year:
+            let startOfYear = calendar.date(from: calendar.dateComponents([.year], from: today))!
+            filteredExpenses = viewModel.transactions.filter {
+                $0.type == .expense && $0.date >= startOfYear
+            }
+        }
+        
+        // Group by category
+        let expensesByCategory = Dictionary(grouping: filteredExpenses) { $0.category }
+        
+        // Calculate total for each category
+        var categoryTotals = expensesByCategory.map { (category, transactions) -> (category: String, amount: Double, icon: String) in
+            let total = transactions.reduce(0) { $0 + $1.amount }
+            let icon = transactions.first?.icon ?? "questionmark"
+            return (category: category, amount: total, icon: icon)
+        }
+        
+        // Sort by amount (descending)
+        categoryTotals.sort { $0.amount > $1.amount }
+        
+        // Calculate total expenses
+        let totalExpense = categoryTotals.reduce(0) { $0 + $1.amount }
+        
+        // Calculate percentage
+        return categoryTotals.map { category, amount, icon in
+            let percentage = totalExpense > 0 ? (amount / totalExpense) * 100 : 0
+            return (category: category, amount: amount, icon: icon, percentage: percentage)
+        }
+    }
+    
+    // Get week data (last 7 days)
+    private func getWeekData() -> [(day: String, date: String, balance: Double)] {
+        let calendar = Calendar.current
+        let today = Date()
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateFormat = "E" // Shows day abbreviation (e.g., Mon, Tue)
+        
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "d" // Just the day number
+
+        return (0..<7).map { offset in
+            let date = calendar.date(byAdding: .day, value: -offset, to: today)!
+            let dayString = dayFormatter.string(from: date)
+            let dateString = dateFormatter.string(from: date)
+
+            let dailyIncome = viewModel.transactions
+                .filter { $0.date.isSameDay(as: date) && $0.type == .income }
+                .reduce(0) { $0 + $1.amount }
+
+            let dailyExpense = viewModel.transactions
+                .filter { $0.date.isSameDay(as: date) && $0.type == .expense }
+                .reduce(0) { $0 + $1.amount }
+
+            let balance = dailyIncome - dailyExpense
+            return (day: dayString, date: dateString, balance: balance)
+        }.reversed() // Keep order from oldest to newest
+    }
+    
+    // Get month data (weekly breakdown)
+    private func getMonthData() -> [(day: String, date: String, balance: Double)] {
+        let calendar = Calendar.current
+        let today = Date()
+        let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
+        
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MMM d"
+        
+        // Calculate the number of weeks in the current month
+        let weeksInMonth = calendar.range(of: .weekOfMonth, in: .month, for: today)?.count ?? 4
+        
+        return (0..<weeksInMonth).map { weekIndex in
+            // Start of this week
+            let weekStart = calendar.date(byAdding: .weekOfYear, value: weekIndex, to: startOfMonth)!
+            // End of this week
+            let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart)!
+            
+            // Get label for the week
+            let weekLabel = "W\(weekIndex + 1)"
+            let startDateStr = dateFormatter.string(from: weekStart)
+            
+            // Calculate balance for this week
+            let weekIncome = viewModel.transactions
+                .filter {
+                    $0.type == .income &&
+                    $0.date >= weekStart &&
+                    $0.date <= min(weekEnd, today)
+                }
+                .reduce(0) { $0 + $1.amount }
+            
+            let weekExpense = viewModel.transactions
+                .filter {
+                    $0.type == .expense &&
+                    $0.date >= weekStart &&
+                    $0.date <= min(weekEnd, today)
+                }
+                .reduce(0) { $0 + $1.amount }
+            
+            let balance = weekIncome - weekExpense
+            return (day: weekLabel, date: startDateStr, balance: balance)
+        }
+    }
+    
+    // Get year data (monthly breakdown)
+    private func getYearData() -> [(day: String, date: String, balance: Double)] {
+        let calendar = Calendar.current
+        let today = Date()
+        let currentYear = calendar.component(.year, from: today)
+        let startOfYear = calendar.date(from: DateComponents(year: currentYear, month: 1, day: 1))!
+        
+        let monthFormatter = DateFormatter()
+        monthFormatter.dateFormat = "MMM"
+        
+        let yearFormatter = DateFormatter()
+        yearFormatter.dateFormat = "yyyy"
+        
+        let currentMonth = calendar.component(.month, from: today)
+        
+        return (0..<currentMonth).map { monthIndex in
+            let monthDate = calendar.date(from: DateComponents(year: currentYear, month: monthIndex + 1, day: 1))!
+            let nextMonthDate = calendar.date(byAdding: .month, value: 1, to: monthDate)!
+            
+            let monthStr = monthFormatter.string(from: monthDate)
+            let yearStr = yearFormatter.string(from: monthDate)
+            
+            let monthIncome = viewModel.transactions
+                .filter {
+                    $0.type == .income &&
+                    $0.date >= monthDate &&
+                    $0.date < nextMonthDate
+                }
+                .reduce(0) { $0 + $1.amount }
+            
+            let monthExpense = viewModel.transactions
+                .filter {
+                    $0.type == .expense &&
+                    $0.date >= monthDate &&
+                    $0.date < nextMonthDate
+                }
+                .reduce(0) { $0 + $1.amount }
+            
+            let balance = monthIncome - monthExpense
+            return (day: monthStr, date: yearStr, balance: balance)
+        }
+    }
+    
+    // Calculate current balance
+    var currentBalance: Double {
+        let income = viewModel.transactions
+            .filter { $0.type == .income }
+            .reduce(0) { $0 + $1.amount }
+        
+        let expense = viewModel.transactions
+            .filter { $0.type == .expense }
+            .reduce(0) { $0 + $1.amount }
+        
+        return income - expense
+    }
+    
+    // Calculate weekly change
+    var weeklyChange: Double {
+        let oneWeekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date())!
+        let twoWeeksAgo = Calendar.current.date(byAdding: .day, value: -14, to: Date())!
+        
+        // Current week transactions
+        let currentWeekIncome = viewModel.transactions
+            .filter { $0.type == .income && $0.date >= oneWeekAgo }
+            .reduce(0) { $0 + $1.amount }
+        
+        let currentWeekExpense = viewModel.transactions
+            .filter { $0.type == .expense && $0.date >= oneWeekAgo }
+            .reduce(0) { $0 + $1.amount }
+        
+        // Previous week transactions
+        let previousWeekIncome = viewModel.transactions
+            .filter { $0.type == .income && $0.date >= twoWeeksAgo && $0.date < oneWeekAgo }
+            .reduce(0) { $0 + $1.amount }
+        
+        let previousWeekExpense = viewModel.transactions
+            .filter { $0.type == .expense && $0.date >= twoWeeksAgo && $0.date < oneWeekAgo }
+            .reduce(0) { $0 + $1.amount }
+        
+        let currentWeekNet = currentWeekIncome - currentWeekExpense
+        let previousWeekNet = previousWeekIncome - previousWeekExpense
+        
+        return previousWeekNet != 0 ? currentWeekNet - previousWeekNet : currentWeekNet
+    }
+    
+    var summaryButtons: [SummaryButton] {
+        // Get month name for the subtitle
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MMMM yyyy"
+        let monthName = dateFormatter.string(from: Date())
+        
+        return [
+            SummaryButton(
+                id: 1,
+                type: .weekly,
+                title: "Weekly Summary",
+                subtitle: "Last 7 Days",
+                systemImage: "chart.line.uptrend.xyaxis",
+                gradient: LinearGradient(
+                    colors: [AppTheme.primary, AppTheme.primary.opacity(0.8)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            ),
+            SummaryButton(
+                id: 2,
+                type: .monthly,
+                title: "Monthly Report",
+                subtitle: monthName,
+                systemImage: "calendar.badge.clock",
+                gradient: LinearGradient(
+                    colors: [AppTheme.secondary, AppTheme.secondary.opacity(0.8)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+        ]
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Fixed Top: Feedback Card
+                PlayfulFinancialFeedbackCard(weeklyChange: weeklyChange)
+                    .padding(.horizontal)
+                    .padding(.top, 18)
+
+                // Scrollable Content
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        // Time Segmented Control
+                        TimeSegmentControl(selectedTimeframe: $selectedTimeframe)
+
+                        // Chart Section
+                        ChartSection(
+                            balanceData: balanceData,
+                            animate: animateChart
+                        )
+
+                        // Transaction Categories
+                        CategoryBreakdownSection(
+                            categories: categoryBreakdown,
+                            animate: animateCategoryChart
+                        )
+
+                        // Daily Breakdown
+                        DailyBreakdownSection(
+                            lastWeekData: balanceData.map { item in
+                                let income = item.balance > 0 ? item.balance : 0
+                                let expense = item.balance < 0 ? abs(item.balance) : 0
+                                return (day: item.day, date: item.date, income: income, expense: expense)
+                            }
+                        )
+
+                        InsightsButtonsSection(
+                            buttons: summaryButtons,
+                            onTapWeekly: { showingWeeklyStory = true },
+                            onTapMonthly: { showingMonthlyStory = true },
+                            storyManager: storyManager
+                        )
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 32)
+                }
+            }
+            .background(
+                Color(uiColor: colorScheme == .dark ? .black : .systemBackground)
+                    .ignoresSafeArea()
+            )
+            .navigationBarTitleDisplayMode(.large)
+            .task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                withAnimation(.easeInOut(duration: 1.0)) {
+                    animateChart = true
+                }
+                withAnimation(.easeInOut(duration: 1.2).delay(0.2)) {
+                    animateCategoryChart = true
+                }
+                storyManager.loadStoredStories()
+                storyManager.updateTransactions(viewModel.transactions)
+            }
+            .onChange(of: selectedTimeframe) { newTimeframe in
+                animateChart = false
+                animateCategoryChart = false
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    withAnimation(.easeInOut(duration: 1.0)) {
+                        animateChart = true
+                    }
+                    withAnimation(.easeInOut(duration: 1.2).delay(0.2)) {
+                        animateCategoryChart = true
+                    }
+                }
+            }
+            .fullScreenCover(isPresented: $showingWeeklyStory) {
+                WeeklyStoryView(
+                    stories: storyManager.weeklyStory.isEmpty ? generateDefaultWeeklyStories() : storyManager.weeklyStory,
+                    showStories: $showingWeeklyStory
+                )
+            }
+            .fullScreenCover(isPresented: $showingMonthlyStory) {
+                MonthlyStoryView(
+                    stories: storyManager.monthlyStory.isEmpty ? generateDefaultMonthlyStories() : storyManager.monthlyStory,
+                    showStories: $showingMonthlyStory
+                )
+            }
+        }
+        .environment(\.colorScheme, colorScheme)
+    }
+    
+    // Fallback stories in case the StoryManager hasn't generated any stories yet
+    private func generateDefaultWeeklyStories() -> [FinancialStory] {
+        return [
+            FinancialStory(
+                title: "Weekly Spending",
+                value: "$0.00",
+                change: "$0.00",
+                isPositive: true,
+                emoji: "💰",
+                backgroundColor: AppTheme.primary
+            ),
+            FinancialStory(
+                title: "Top Category",
+                value: "No Expenses",
+                change: "$0.00",
+                isPositive: true,
+                emoji: "🛒",
+                backgroundColor: AppTheme.secondary
+            ),
+            FinancialStory(
+                title: "Weekly Balance",
+                value: "$0.00",
+                change: "$0.00",
+                isPositive: true,
+                emoji: "✨",
+                backgroundColor: AppTheme.accent
+            )
+        ]
+    }
+    
+    private func generateDefaultMonthlyStories() -> [FinancialStory] {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MMMM yyyy"
+        let monthName = dateFormatter.string(from: Date())
+        
+        return [
+            FinancialStory(
+                title: "Monthly Spending",
+                value: "$0.00",
+                change: "$0.00",
+                isPositive: true,
+                emoji: "📊",
+                backgroundColor: AppTheme.primary
+            ),
+            FinancialStory(
+                title: "Monthly Savings",
+                value: "$0.00",
+                change: "$0.00",
+                isPositive: true,
+                emoji: "💸",
+                backgroundColor: Color(hex: "63C7FF")
+            ),
+            FinancialStory(
+                title: "Investments",
+                value: "$0.00",
+                change: monthName,
+                isPositive: true,
+                emoji: "📈",
+                backgroundColor: Color(hex: "8676FF")
+            )
+        ]
+    }
+}
+
+
+struct InsightsButtonsSection: View {
+    let buttons: [SummaryButton]
+    let onTapWeekly: () -> Void
+    let onTapMonthly: () -> Void
+    @ObservedObject var storyManager: StoryManager // Add storyManager as an observed object
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Insights & Reports")
+                .font(.headline)
+                .foregroundColor(AppTheme.textPrimary)
+            
+            VStack(spacing: 12) {
+                ForEach(buttons) { button in
+                    Button(action: {
+                        if button.type == .weekly && storyManager.hasWeeklyStory() {
+                            onTapWeekly()
+                        } else if button.type == .monthly && storyManager.hasMonthlyStory() {
+                            onTapMonthly()
+                        }
+                    }) {
+                        InsightButton(button: button)
+                            .opacity(isButtonEnabled(for: button) ? 1.0 : 0.5)
+                    }
+                    .disabled(!isButtonEnabled(for: button))
+                }
+            }
+        }
+    }
+    
+    // Helper function to determine if a button should be enabled
+    private func isButtonEnabled(for button: SummaryButton) -> Bool {
+        if button.type == .weekly {
+            return storyManager.hasWeeklyStory()
+        } else if button.type == .monthly {
+            return storyManager.hasMonthlyStory()
+        }
+        return false
+    }
+}
+import SwiftUI
+
+struct PlayfulFinancialFeedbackCard: View {
+    let weeklyChange: Double
+    @State private var isExpanded = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var statusInfo: (emoji: String, color: Color) {
+        if weeklyChange > 40 {
+            return ("🚀", Color.green)
+        } else if weeklyChange > 10 {
+            return ("🌟", Color(hue: 90/360, saturation: 0.6, brightness: 0.75))
+        } else if weeklyChange >= 0 {
+            return ("👍", Color.blue)
+        } else if weeklyChange > -30 {
+            return ("⚠️", Color.orange)
+        } else {
+            return ("🔍", Color.red)
+        }
+    }
+
+    private var feedbackPhrase: String {
+        if weeklyChange > 40 {
+            return "Exceptional"
+        } else if weeklyChange > 10 {
+            return "On Track"
+        } else if weeklyChange >= 0 {
+            return "Stable"
+        } else if weeklyChange > -30 {
+            return "Watch Spending"
+        } else {
+            return "Action Needed"
+        }
+    }
+
+    var body: some View {
+        VStack {
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(statusInfo.color.opacity(0.15))
+                        .frame(width: 60, height: 60)
+
+                    Text(statusInfo.emoji)
+                        .font(.system(size: 28))
+                }
+                .padding(.leading, 4)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(statusInfo.color)
+                            .frame(width: 10, height: 10)
+
+                        Text(feedbackPhrase)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(statusInfo.color)
+                    }
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("\(weeklyChange >= 0 ? "+" : "")\(String(format: "$%.2f", abs(weeklyChange)))")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(weeklyChange >= 0 ? .green : .red)
+
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 10))
+
+                        Text("This Week")
+                            .font(.system(size: 12))
+                    }
+                    .foregroundColor(colorScheme == .dark ? Color.gray.opacity(0.6) : Color.gray)
+                }
+                .padding(.trailing, 4)
+            }
+            .padding(.vertical, 16)
+            .padding(.horizontal, 14)
+            .background(
+                ZStack(alignment: .bottomTrailing) {
+                    // Direct dark/light background color
+                    RoundedRectangle(cornerRadius: 18)
+                        .fill(colorScheme == .dark ? Color(UIColor.systemGray6) : Color.white)
+
+                    RoundedRectangle(cornerRadius: 18)
+                        .trim(from: 0.7, to: 1.0)
+                        .stroke(statusInfo.color.opacity(0.3), lineWidth: 3)
+
+                    HStack(spacing: 4) {
+                        ForEach(0..<8) { i in
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(statusInfo.color.opacity(0.03 + Double(i) * 0.01))
+                                .frame(width: 3, height: 15 + CGFloat(i * 6))
+                        }
+                    }
+                    .rotationEffect(.degrees(180))
+                    .offset(x: -12, y: -4)
+
+                    Path { path in
+                        let startX: CGFloat = 80
+                        let width: CGFloat = 300
+                        let height: CGFloat = 40
+
+                        path.move(to: CGPoint(x: startX, y: height))
+
+                        for i in 0..<8 {
+                            let x = startX + width * CGFloat(i) / 8
+                            let randomFactor = CGFloat.random(in: 0.8...1.2)
+                            let yOffset = height * 0.5 * (1 - CGFloat(i) / 8) * (weeklyChange >= 0 ? -1 : 1) * randomFactor
+                            path.addLine(to: CGPoint(x: x, y: height + yOffset))
+                        }
+                    }
+                    .stroke(statusInfo.color.opacity(0.15), lineWidth: 1.5)
+                    .offset(x: 40, y: 10)
+                }
+            )
+            .cornerRadius(18)
+            .padding(.bottom, 10)
+            .shadow(color: colorScheme == .dark ? Color.black.opacity(0.2) : Color.gray.opacity(0.1), radius: 10, x: 0, y: 4)
+            .onTapGesture {
+                withAnimation {
+                    isExpanded.toggle()
+                }
+            }
+        }
+    }
+}
+// MARK: - Component Views
+struct BalanceCard: View {
+    let balance: Double
+    let weeklyChange: Double
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Current Balance")
+                .font(.subheadline)
+                .foregroundColor(AppTheme.textSecondary)
+            
+            Text("$\(String(format: "%.2f", balance))")
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .foregroundColor(AppTheme.textPrimary)
+            
+            HStack {
+                Text("\(weeklyChange >= 0 ? "+" : "")\(String(format: "%.2f", weeklyChange)) this week")
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(weeklyChange >= 0 ? AppTheme.incomeColor.opacity(0.15) : AppTheme.expenseColor.opacity(0.15))
+                    .foregroundColor(weeklyChange >= 0 ? AppTheme.incomeColor : AppTheme.expenseColor)
+                    .cornerRadius(12)
+                
+                Spacer()
+            }
+        }
+        .padding()
+        .background(AppTheme.cardBg)
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+    }
+}
+import SwiftUI
+import CoreHaptics
+
+struct TimeSegmentControl: View {
+    @Binding var selectedTimeframe: InsightsView.Timeframe
+    @Namespace private var animation
+    @State private var engine: CHHapticEngine?
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Time Frame")
+                .font(.headline)
+                .foregroundColor(colorScheme == .dark ? .white : .black)
+                .padding(.top, 8)
+
+            HStack(spacing: 8) {
+                ForEach(InsightsView.Timeframe.allCases, id: \.self) { timeframe in
+                    Button(action: {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            selectedTimeframe = timeframe
+                            triggerHaptic()
+                        }
+                    }) {
+                        ZStack {
+                            if selectedTimeframe == timeframe {
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(Color.accentColor)
+                                    .matchedGeometryEffect(id: "highlight", in: animation)
+                            }
+
+                            Text(timeframe.rawValue)
+                                .font(.subheadline)
+                                .fontWeight(selectedTimeframe == timeframe ? .medium : .regular)
+                                .padding(.vertical, 6)
+                                .padding(.horizontal, 14)
+                                .foregroundColor(selectedTimeframe == timeframe ? .white : (colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.8)))
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(colorScheme == .dark ? Color(UIColor.systemGray6) : Color(UIColor.systemGray5))
+                                        .opacity(selectedTimeframe == timeframe ? 0 : 1)
+                                )
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+            .padding(.top, 4)
+            .frame(width: 300)
+        }
+        .padding(.horizontal)
+        .frame(width: 300)
+        .onAppear {
+            prepareHaptics()
+        }
+    }
+
+    private func prepareHaptics() {
+        do {
+            engine = try CHHapticEngine()
+            try engine?.start()
+        } catch {
+            print("Haptics engine failed to start: \(error.localizedDescription)")
+        }
+    }
+
+    private func triggerHaptic() {
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
+
+        let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.5)
+        let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)
+        let event = CHHapticEvent(eventType: .hapticTransient,
+                                  parameters: [intensity, sharpness],
+                                  relativeTime: 0)
+
+        do {
+            let pattern = try CHHapticPattern(events: [event], parameters: [])
+            let player = try engine?.makePlayer(with: pattern)
+            try player?.start(atTime: 0)
+        } catch {
+            print("Failed to play haptic: \(error.localizedDescription)")
+        }
+    }
+}
+
+import SwiftUI
+import Charts
+
+struct ChartSection: View {
+    let balanceData: [(day: String, date: String, balance: Double)]
+    let animate: Bool
+    @Environment(\.colorScheme) private var colorScheme
+    
+    var maxBalance: Double {
+        let max = balanceData.map { $0.balance }.max() ?? 1000
+        return max > 0 ? max : 1000
+    }
+
+    var minBalance: Double {
+        let min = balanceData.map { $0.balance }.min() ?? 0
+        return min < 0 ? min : 0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Balance Overview")
+                .font(.headline)
+                .foregroundColor(colorScheme == .dark ? .white : .black)
+            
+            if balanceData.isEmpty {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 8) {
+                        Image(systemName: "chart.line.uptrend.xyaxis")
+                            .font(.system(size: 32))
+                            .foregroundColor((colorScheme == .dark ? Color.white : Color.gray).opacity(0.5))
+                        Text("No data available for this period")
+                            .font(.subheadline)
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .gray)
+                    }
+                    .padding(.vertical, 24)
+                    Spacer()
+                }
+                .padding()
+                .background(colorScheme == .dark ? Color(UIColor.systemGray6) : .white)
+                .cornerRadius(16)
+                .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+            } else {
+                Chart {
+                    ForEach(balanceData.indices, id: \.self) { index in
+                        let item = balanceData[index]
+
+                        LineMark(
+                            x: .value("Day", "\(item.day)\n\(item.date)"),
+                            y: .value("Balance", animate ? item.balance : minBalance)
+                        )
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [Color.accentColor, Color.accentColor.opacity(0.7)],
+                                startPoint: .bottom,
+                                endPoint: .top
+                            )
+                        )
+                        .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .interpolationMethod(.catmullRom)
+
+                        AreaMark(
+                            x: .value("Day", "\(item.day)\n\(item.date)"),
+                            y: .value("Balance", animate ? item.balance : minBalance)
+                        )
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [
+                                    Color.accentColor.opacity(0.3),
+                                    Color.accentColor.opacity(0.05)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .interpolationMethod(.catmullRom)
+
+                        PointMark(
+                            x: .value("Day", "\(item.day)\n\(item.date)"),
+                            y: .value("Balance", animate ? item.balance : minBalance)
+                        )
+                        .foregroundStyle(Color.white)
+                        .symbolSize(30)
+
+                        PointMark(
+                            x: .value("Day", "\(item.day)\n\(item.date)"),
+                            y: .value("Balance", animate ? item.balance : minBalance)
+                        )
+                        .foregroundStyle(Color.accentColor)
+                        .symbolSize(20)
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(preset: .extended, position: .leading) { value in
+                        AxisGridLine()
+                            .foregroundStyle(Color.gray.opacity(0.2))
+                        AxisValueLabel()
+                            .font(.caption)
+                            .foregroundStyle(colorScheme == .dark ? .white.opacity(0.8) : .gray)
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks { value in
+                        AxisValueLabel()
+                            .font(.caption)
+                            .foregroundStyle(colorScheme == .dark ? .white.opacity(0.8) : .gray)
+                    }
+                }
+                .frame(height: 240)
+                .padding()
+                .background(colorScheme == .dark ? Color(UIColor.systemGray6) : .white)
+                .cornerRadius(16)
+                .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+            }
+        }
+    }
+}
+import SwiftUI
+
+struct CategoryBreakdownSection: View {
+    let categories: [(category: String, amount: Double, icon: String, percentage: Double)]
+    let animate: Bool
+    @State private var showDetailView = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Spending by Category")
+                .font(.headline)
+                .foregroundColor(colorScheme == .dark ? .white : .black)
+            
+            if categories.isEmpty {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 8) {
+                        Image(systemName: "chart.pie")
+                            .font(.system(size: 32))
+                            .foregroundColor((colorScheme == .dark ? Color.white : Color.gray).opacity(0.5))
+                        Text("No expenses in this period")
+                            .font(.subheadline)
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .gray)
+                    }
+                    .padding(.vertical, 24)
+                    Spacer()
+                }
+                .padding()
+                .background(colorScheme == .dark ? Color(UIColor.systemGray6) : .white)
+                .cornerRadius(16)
+                .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+            } else {
+                HStack(spacing: 16) {
+                    ZStack {
+                        Circle()
+                            .stroke(lineWidth: 14)
+                            .foregroundColor(Color.gray.opacity(0.1))
+                            .frame(width: 100, height: 100)
+                        
+                        ForEach(0..<min(categories.count, 5), id: \.self) { index in
+                            let startAngle = getStartAngle(at: index)
+                            let endAngle = animate ? getEndAngle(at: index) : startAngle
+                            
+                            Circle()
+                                .trim(from: startAngle/360, to: endAngle/360)
+                                .stroke(style: StrokeStyle(lineWidth: 14, lineCap: .round))
+                                .foregroundColor(getCategoryColor(at: index))
+                                .rotationEffect(Angle(degrees: -90))
+                                .frame(width: 100, height: 100)
+                                .animation(.easeInOut(duration: 1.0).delay(0.1 * Double(index)), value: animate)
+                        }
+                        
+                        VStack {
+                            Text("Total")
+                                .font(.caption2)
+                                .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                            Text("$\(String(format: "%.0f", categories.reduce(0) { $0 + $1.amount }))")
+                                .font(.body.bold())
+                                .foregroundColor(colorScheme == .dark ? .white : .black)
+                                .opacity(animate ? 1 : 0)
+                                .animation(.easeIn(duration: 0.6).delay(0.3), value: animate)
+                        }
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(0..<min(categories.count, 5), id: \.self) { index in
+                            let category = categories[index]
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(getCategoryColor(at: index))
+                                    .frame(width: 12, height: 12)
+                                    .scaleEffect(animate ? 1 : 0.1)
+                                    .animation(.spring(response: 0.6, dampingFraction: 0.7).delay(0.1 * Double(index)), value: animate)
+                                
+                                Image(systemName: category.icon)
+                                    .font(.caption2)
+                                    .foregroundColor(colorScheme == .dark ? .white : .black)
+                                    .opacity(animate ? 1 : 0)
+                                    .animation(.easeIn(duration: 0.5).delay(0.2 + 0.1 * Double(index)), value: animate)
+                                
+                                Text(category.category)
+                                    .font(.caption)
+                                    .foregroundColor(colorScheme == .dark ? .white : .black)
+                                    .lineLimit(1)
+                                    .opacity(animate ? 1 : 0)
+                                    .animation(.easeIn(duration: 0.5).delay(0.3 + 0.1 * Double(index)), value: animate)
+                                
+                                Spacer()
+                                
+                                Text("\(animate ? Int(category.percentage) : 0)%")
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                                    .animation(.easeInOut(duration: 1.0).delay(0.4 + 0.1 * Double(index)), value: animate)
+                            }
+                        }
+                    }
+                }
+                .padding()
+                .background(colorScheme == .dark ? Color(UIColor.systemGray6) : .white)
+                .cornerRadius(16)
+                .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+                .onTapGesture {
+                    withAnimation {
+                        showDetailView = true
+                    }
+                }
+                .fullScreenCover(isPresented: $showDetailView) {
+                    SimplifiedCategoryDetailView(
+                        categories: categories,
+                        showDetailView: $showDetailView
+                    )
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                }
+            }
+        }
+    }
+    private func getCategoryColor(at index: Int) -> Color {
+        let colors: [Color] = [
+            AppTheme.primary,
+            AppTheme.accent,
+            AppTheme.secondary,
+            Color(hex: "8676FF"),
+            Color(hex: "63C7FF")
+        ]
+        return colors[index % colors.count]
+    }
+    
+    private func getStartAngle(at index: Int) -> Double {
+        if index == 0 {
+            return 0
+        }
+        
+        var sum: Double = 0
+        for i in 0..<index {
+            sum += categories[i].percentage
+        }
+        return sum * 3.6 // Convert percentage to degrees
+    }
+    
+    private func getEndAngle(at index: Int) -> Double {
+        var sum: Double = 0
+        for i in 0...index {
+            sum += categories[i].percentage
+        }
+        return sum * 3.6 // Convert percentage to degrees
+    }
+}
+
+struct SimplifiedCategoryDetailView: View {
+    let categories: [(category: String, amount: Double, icon: String, percentage: Double)]
+    @Binding var showDetailView: Bool
+    @State private var selectedCategoryIndex: Int? = nil
+    @State private var animate = false
+    @Environment(\.colorScheme) private var colorScheme
+    
+    var body: some View {
+        NavigationView {
+            ZStack {
+                (colorScheme == .dark ? Color.black : Color(UIColor.systemGroupedBackground))
+                    .edgesIgnoringSafeArea(.all)
+                
+                VStack(spacing: 20) {
+                    // Large animated donut chart
+                    ZStack {
+                        Circle()
+                            .stroke(lineWidth: 30)
+                            .foregroundColor(Color.gray.opacity(0.1))
+                            .frame(width: 220, height: 220)
+                        
+                        ForEach(0..<categories.count, id: \.self) { index in
+                            let startAngle = getStartAngle(at: index)
+                            let endAngle = animate ? getEndAngle(at: index) : startAngle
+                            let isSelected = selectedCategoryIndex == index
+                            
+                            Circle()
+                                .trim(from: startAngle / 360, to: endAngle / 360)
+                                .stroke(style: StrokeStyle(lineWidth: isSelected ? 34 : 30, lineCap: .round))
+                                .foregroundColor(getCategoryColor(at: index))
+                                .rotationEffect(.degrees(-90))
+                                .frame(width: 220, height: 220)
+                                .animation(.easeInOut(duration: 1.2).delay(0.05 * Double(index)), value: animate)
+                                .scaleEffect(isSelected ? 1.05 : 1.0)
+                                .animation(.spring(response: 0.3), value: selectedCategoryIndex)
+                                .onTapGesture {
+                                    withAnimation {
+                                        selectedCategoryIndex = (selectedCategoryIndex == index) ? nil : index
+                                    }
+                                }
+                        }
+
+                        VStack {
+                            if let selectedIndex = selectedCategoryIndex {
+                                let category = categories[selectedIndex]
+                                VStack(spacing: 4) {
+                                    Image(systemName: category.icon)
+                                        .font(.system(size: 24))
+                                        .foregroundColor(getCategoryColor(at: selectedIndex))
+                                    
+                                    Text(category.category)
+                                        .font(.headline)
+                                        .foregroundColor(colorScheme == .dark ? .white : .black)
+                                    
+                                    Text("$\(String(format: "%.2f", category.amount))")
+                                        .font(.title2.bold())
+                                        .foregroundColor(colorScheme == .dark ? .white : .black)
+                                    
+                                    Text("\(Int(category.percentage))%")
+                                        .font(.subheadline)
+                                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                                }
+                                .transition(.opacity.combined(with: .scale))
+                                .id("selected-\(selectedIndex)")
+                            } else {
+                                VStack {
+                                    Text("Total")
+                                        .font(.headline)
+                                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                                    
+                                    Text("$\(String(format: "%.2f", categories.reduce(0) { $0 + $1.amount }))")
+                                        .font(.title.bold())
+                                        .foregroundColor(colorScheme == .dark ? .white : .black)
+                                }
+                                .transition(.opacity.combined(with: .scale))
+                                .id("total")
+                            }
+                        }
+                        .animation(.easeInOut, value: selectedCategoryIndex)
+                    }
+                    .padding(.top, 20)
+                    
+                    // Categories list
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            ForEach(0..<categories.count, id: \.self) { index in
+                                let category = categories[index]
+                                let isSelected = selectedCategoryIndex == index
+                                
+                                HStack(spacing: 12) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(getCategoryColor(at: index))
+                                            .frame(width: 36, height: 36)
+                                        
+                                        Image(systemName: category.icon)
+                                            .font(.system(size: 16))
+                                            .foregroundColor(.white)
+                                    }
+                                    .opacity(animate ? 1 : 0)
+                                    .scaleEffect(animate ? (isSelected ? 1.1 : 1.0) : 0.5)
+                                    .animation(.spring(response: 0.5, dampingFraction: 0.7).delay(0.05 * Double(index)), value: animate)
+                                    .animation(.spring(response: 0.3), value: selectedCategoryIndex)
+                                    
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(category.category)
+                                            .font(.headline)
+                                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                                            .opacity(animate ? 1 : 0)
+                                            .animation(.easeIn(duration: 0.5).delay(0.1 + 0.05 * Double(index)), value: animate)
+                                        
+                                        Text("\(Int(category.percentage))% of total")
+                                            .font(.subheadline)
+                                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                                            .opacity(animate ? 1 : 0)
+                                            .animation(.easeIn(duration: 0.5).delay(0.15 + 0.05 * Double(index)), value: animate)
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Text("$\(String(format: "%.2f", category.amount))")
+                                        .font(.headline)
+                                        .foregroundColor(isSelected ? getCategoryColor(at: index) : (colorScheme == .dark ? .white : .black))
+                                        .opacity(animate ? 1 : 0)
+                                        .animation(.easeIn(duration: 0.5).delay(0.2 + 0.05 * Double(index)), value: animate)
+                                        .animation(.easeInOut(duration: 0.3), value: selectedCategoryIndex)
+                                }
+                                .padding(.vertical, 12)
+                                .padding(.horizontal, 16)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(colorScheme == .dark ? Color(UIColor.secondarySystemBackground) : Color.white)
+                                        .shadow(color: isSelected ? getCategoryColor(at: index).opacity(0.2) : Color.black.opacity(0.05),
+                                                radius: isSelected ? 8 : 4,
+                                                x: 0,
+                                                y: isSelected ? 4 : 2)
+                                )
+                                .scaleEffect(isSelected ? 1.02 : 1.0)
+                                .animation(.spring(response: 0.3), value: selectedCategoryIndex)
+                                .onTapGesture {
+                                    withAnimation {
+                                        selectedCategoryIndex = (selectedCategoryIndex == index) ? nil : index
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 20)
+                        .padding(.top, 20)
+                    }
+                }
+                .padding(.top, 16)
+            }
+            .navigationBarTitle("Category Details", displayMode: .inline)
+            .navigationBarItems(
+                trailing: Button(action: {
+                    withAnimation {
+                        showDetailView = false
+                    }
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                        .font(.system(size: 24))
+                }
+            )
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation(.easeOut(duration: 0.8)) {
+                        animate = true
+                    }
+                }
+            }
+        }
+    }
+    
+    private func getCategoryColor(at index: Int) -> Color {
+        let colors: [Color] = [
+            AppTheme.primary,
+            AppTheme.accent,
+            AppTheme.secondary,
+            Color(hex: "8676FF"),
+            Color(hex: "63C7FF"),
+            Color(hex: "FF966D"),
+            Color(hex: "FF6D8B")
+        ]
+        return colors[index % colors.count]
+    }
+    
+    private func getStartAngle(at index: Int) -> Double {
+        if index == 0 {
+            return 0
+        }
+        
+        var sum: Double = 0
+        for i in 0..<index {
+            sum += categories[i].percentage
+        }
+        return sum * 3.6 // Convert percentage to degrees
+    }
+    
+    private func getEndAngle(at index: Int) -> Double {
+        var sum: Double = 0
+        for i in 0...index {
+            sum += categories[i].percentage
+        }
+        return sum * 3.6 // Convert percentage to degrees
+    }
+}
+import SwiftUI
+
+struct DailyBreakdownSection: View {
+    let lastWeekData: [(day: String, date: String, income: Double, expense: Double)]
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Breakdown")
+                .font(.headline)
+                .foregroundColor(colorScheme == .dark ? .white : .black)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(lastWeekData.indices, id: \.self) { index in
+                        let item = lastWeekData[index]
+                        DailyBreakdownCard(
+                            day: item.day,
+                            date: item.date,
+                            income: item.income,
+                            expense: item.expense
+                        )
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+}
+
+struct DailyBreakdownCard: View {
+    let day: String
+    let date: String
+    let income: Double
+    let expense: Double
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(day)
+                        .font(.headline)
+                        .foregroundColor(colorScheme == .dark ? .white : .black)
+
+                    Text(date)
+                        .font(.caption)
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                }
+
+                Spacer()
+
+                Circle()
+                                    .fill(AppTheme.primary.opacity(0.15))
+                                    .frame(width: 36, height: 36)
+                                    .overlay(
+                                        Text(day.prefix(1))
+                                            .font(.system(size: 14, weight: .bold))
+                                            .foregroundColor(AppTheme.primary)
+                                    )
+                            }
+
+            Divider()
+                .background(Color.gray.opacity(0.2))
+
+            VStack(spacing: 12) {
+                HStack {
+                    Image(systemName: "arrow.down")
+                        .font(.caption2)
+                        .padding(6)
+                        .background(Color.green.opacity(0.15))
+                        .foregroundColor(.green)
+                        .cornerRadius(8)
+
+                    Text("Income")
+                        .font(.caption)
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+
+                    Spacer()
+
+                    Text("$\(String(format: "%.2f", income))")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.green)
+                }
+
+                HStack {
+                    Image(systemName: "arrow.up")
+                        .font(.caption2)
+                        .padding(6)
+                        .background(Color.red.opacity(0.15))
+                        .foregroundColor(.red)
+                        .cornerRadius(8)
+
+                    Text("Spent")
+                        .font(.caption)
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+
+                    Spacer()
+
+                    Text("$\(String(format: "%.2f", expense))")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.red)
+                }
+            }
+        }
+        .padding()
+        .background(colorScheme == .dark ? Color(UIColor.secondarySystemBackground) : Color.white)
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+        .frame(width: 220)
+    }
+}
+
+struct BreakdownData {
+    let day: String
+    let date: String
+    let income: Double
+    let expense: Double
+}
+
+struct InsightButton: View {
+    let button: SummaryButton
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack {
+            ZStack {
+                Circle()
+                    .fill(button.gradient)
+                    .frame(width: 48, height: 48)
+
+                Image(systemName: button.systemImage)
+                    .font(.system(size: 20))
+                    .foregroundColor(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(button.title)
+                    .font(.headline)
+                    .foregroundColor(colorScheme == .dark ? .white : AppTheme.textPrimary)
+
+                Text(button.subtitle)
+                    .font(.caption)
+                    .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : AppTheme.textSecondary)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(colorScheme == .dark ? .white.opacity(0.6) : AppTheme.textSecondary)
+        }
+        .padding()
+        .background(colorScheme == .dark ? Color(UIColor.secondarySystemBackground) : AppTheme.cardBg)
+        .cornerRadius(16)
+        .shadow(color: colorScheme == .dark ? Color.clear : Color.black.opacity(0.05), radius: 5, x: 0, y: 3)
+    }
+}
+
+// MARK: - Weekly Story View Fix
+struct WeeklyStoryView: View {
+    @State private var currentStoryIndex = 0
+    @State private var progressValues: [CGFloat]
+    @State private var timer: Timer? = nil
+    let stories: [FinancialStory]
+    @Binding var showStories: Bool
+    @State private var isPaused = false
+    @State private var animateValue = false
+
+    init(stories: [FinancialStory], showStories: Binding<Bool>) {
+        self.stories = stories
+        self._showStories = showStories
+        self._progressValues = State(initialValue: Array(repeating: 0, count: stories.count))
+    }
+
+    var body: some View {
+        ZStack {
+          
+            stories[currentStoryIndex].backgroundColor
+                           .ignoresSafeArea()
+                       
+            VStack {
+                // Progress bars
+                HStack(spacing: 4) {
+                    ForEach(0..<stories.count, id: \.self) { index in
+                        GeometryReader { geometry in
+                            ZStack(alignment: .leading) {
+                                Capsule()
+                                    .foregroundColor(Color.white.opacity(0.3))
+                                    .frame(height: 4)
+
+                                Capsule()
+                                    .foregroundColor(.white)
+                                    .frame(width: geometry.size.width * progressValues[index], height: 4)
+                            }
+                        }
+                        .frame(height: 4)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+
+                // Header with Date
+                HStack {
+                    ZStack {
+                        Circle()
+                            .fill(Color.white.opacity(0.2))
+                            .frame(width: 40, height: 40)
+                        
+                        Image(systemName: "chart.bar.fill")
+                            .foregroundColor(.white)
+                    }
+
+                    VStack(alignment: .leading) {
+                        Text("Weekly Insights")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        
+                        Text(weekDateRangeFormatted())
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+
+                    Spacer()
+
+                    Button(action: { showStories = false }) {
+                        Image(systemName: "xmark")
+                            .foregroundColor(.white)
+                            .padding(8)
+                            .background(Color.white.opacity(0.2))
+                            .clipShape(Circle())
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 8)
+
+                Spacer()
+
+                // Main content
+                VStack(alignment: .center, spacing: 24) {
+                    Circle()
+                        .fill(Color.white.opacity(0.2))
+                        .frame(width: 120, height: 120)
+                        .overlay(
+                            Text(stories[currentStoryIndex].emoji)
+                                .font(.system(size: 60))
+                        )
+
+                    Text(stories[currentStoryIndex].title)
+                        .font(.headline)
+                        .foregroundColor(.white.opacity(0.8))
+
+                    Text(stories[currentStoryIndex].value)
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .scaleEffect(animateValue ? 1.0 : 0.8)
+                        .opacity(animateValue ? 1.0 : 0.0)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.8), value: animateValue)
+
+                    HStack(spacing: 6) {
+                        Image(systemName: stories[currentStoryIndex].isPositive ? "arrow.up.right" : "arrow.down.right")
+                            .foregroundColor(.white)
+                            .padding(6)
+                            .background(
+                                stories[currentStoryIndex].isPositive ?
+                                AppTheme.incomeColor.opacity(0.7) :
+                                AppTheme.expenseColor.opacity(0.7)
+                            )
+                            .cornerRadius(8)
+
+                        Text(stories[currentStoryIndex].change)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.2))
+                    .cornerRadius(20)
+                }
+                .padding(.horizontal, 24)
+
+                Spacer()
+
+                // Tap areas for navigation
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .opacity(0.001)
+                        .onTapGesture { goToPreviousStory() }
+
+                    Rectangle()
+                        .opacity(0.001)
+                        .onTapGesture { goToNextStory() }
+                }
+            }
+        }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in pauseStory() }
+                .onEnded { _ in resumeStory() }
+        )
+        .onAppear {
+            startTimer()
+            withAnimation {
+                animateValue = true
+            }
+        }
+        .onDisappear {
+            timer?.invalidate()
+            timer = nil
+        }
+        .onChange(of: currentStoryIndex) { _ in
+            animateValue = false
+            Task {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                withAnimation {
+                    animateValue = true
+                }
+            }
+        }
+    }
+
+  
+    func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            if !isPaused, progressValues[currentStoryIndex] < 1.0 {
+                progressValues[currentStoryIndex] += 0.005
+            } else if !isPaused {
+                goToNextStory()
+            }
+        }
+    }
+
+    func pauseStory() {
+        isPaused = true
+        timer?.invalidate()
+    }
+
+    func resumeStory() {
+        isPaused = false
+        startTimer()
+    }
+
+    func goToNextStory() {
+        if currentStoryIndex < stories.count - 1 {
+            progressValues[currentStoryIndex] = 1.0
+            currentStoryIndex += 1
+            startTimer()
+        } else {
+            showStories = false // Close stories when last one ends
+        }
+    }
+
+    func goToPreviousStory() {
+        if currentStoryIndex > 0 {
+            progressValues[currentStoryIndex] = 0
+            currentStoryIndex -= 1
+            progressValues[currentStoryIndex] = 0
+            startTimer()
+        }
+    }
+}
+#Preview {
+    InsightsView(viewModel: BudgetViewModel())
+}
+import SwiftUI
+
+// A dedicated class for managing financial stories
+class StoryManager: ObservableObject {
+    @Published var weeklyStory: [FinancialStory] = []
+    @Published var monthlyStory: [FinancialStory] = []
+    @Published var lastWeeklyUpdateDate: Date?
+    @Published var lastMonthlyUpdateDate: Date?
+    
+    private var transactions: [Transaction] = []
+    
+    // Call this whenever the transaction list changes
+    func updateTransactions(_ newTransactions: [Transaction]) {
+        self.transactions = newTransactions
+        checkAndGenerateStories()
+        saveStories()
+    }
+    
+    // This would be triggered by the app at launch
+    func loadStoredStories() {
+        // Load saved stories
+        if let savedWeeklyStory = UserDefaults.standard.data(forKey: "weeklyStory") {
+            if let decodedStory = try? JSONDecoder().decode([FinancialStory].self, from: savedWeeklyStory) {
+                self.weeklyStory = decodedStory
+            }
+        }
+        
+        if let savedMonthlyStory = UserDefaults.standard.data(forKey: "monthlyStory") {
+            if let decodedStory = try? JSONDecoder().decode([FinancialStory].self, from: savedMonthlyStory) {
+                self.monthlyStory = decodedStory
+            }
+        }
+        
+        // Load last update timestamps
+        lastWeeklyUpdateDate = UserDefaults.standard.object(forKey: "lastWeeklyUpdate") as? Date
+        lastMonthlyUpdateDate = UserDefaults.standard.object(forKey: "lastMonthlyUpdate") as? Date
+    }
+    
+    private func saveStories() {
+        if let encoded = try? JSONEncoder().encode(weeklyStory) {
+            UserDefaults.standard.set(encoded, forKey: "weeklyStory")
+        }
+        
+        if let encoded = try? JSONEncoder().encode(monthlyStory) {
+            UserDefaults.standard.set(encoded, forKey: "monthlyStory")
+        }
+    }
+    
+    func checkAndGenerateStories() {
+        let currentDate = Date()
+        
+        // Check if weekly story needs update (every Monday or first run)
+        if shouldUpdateWeekly(currentDate: currentDate) {
+            generateWeeklyStory()
+            lastWeeklyUpdateDate = currentDate
+            UserDefaults.standard.set(currentDate, forKey: "lastWeeklyUpdate")
+        }
+        
+        // Check if monthly story needs update (first day of month or first run)
+        if shouldUpdateMonthly(currentDate: currentDate) {
+            generateMonthlyStory()
+            lastMonthlyUpdateDate = currentDate
+            UserDefaults.standard.set(currentDate, forKey: "lastMonthlyUpdate")
+        }
+    }
+    
+    private func shouldUpdateWeekly(currentDate: Date) -> Bool {
+        // Update weekly story if:
+        // 1. We've never generated a weekly story before
+        // 2. It's been at least 7 days since the last update
+        // 3. It's Monday (weekday == 2) and we haven't updated today
+        
+        if lastWeeklyUpdateDate == nil {
+            // If no data, check if it's Monday
+            let calendar = Calendar.current
+            let isMonday = calendar.component(.weekday, from: currentDate) == 2
+            
+            // Only generate a story on Monday if there's no previous data
+            return isMonday && !transactions.isEmpty
+        }
+        
+        let calendar = Calendar.current
+        
+        // Check if it's Monday and we haven't updated today
+        let isToday = calendar.isDate(lastWeeklyUpdateDate!, inSameDayAs: currentDate)
+        let isMonday = calendar.component(.weekday, from: currentDate) == 2
+        
+        if isMonday && !isToday {
+            return true
+        }
+        
+        // Check if it's been at least 7 days
+        if let lastUpdate = lastWeeklyUpdateDate,
+           let daysSinceLastUpdate = calendar.dateComponents([.day], from: lastUpdate, to: currentDate).day,
+           daysSinceLastUpdate >= 7 {
+            return true
+        }
+        
+        return false
+    }
+    
+    private func shouldUpdateMonthly(currentDate: Date) -> Bool {
+        // Update monthly story if:
+        // 1. We've never generated a monthly story before
+        // 2. It's the first day of the month and we haven't updated today
+        
+        if lastMonthlyUpdateDate == nil {
+            // If no data, check if it's the first of the month
+            let calendar = Calendar.current
+            let isFirstOfMonth = calendar.component(.day, from: currentDate) == 1
+            
+            // Only generate a story on the first of month if there's no previous data
+            return isFirstOfMonth && !transactions.isEmpty
+        }
+        
+        let calendar = Calendar.current
+        
+        // Check if it's the first day of the month and we haven't updated today
+        let isToday = calendar.isDate(lastMonthlyUpdateDate!, inSameDayAs: currentDate)
+        let dayOfMonth = calendar.component(.day, from: currentDate)
+        
+        if dayOfMonth == 1 && !isToday {
+            return true
+        }
+        
+        return false
+    }
+    
+    func generateWeeklyStory() {
+        // Check if there are any transactions before proceeding
+        if transactions.isEmpty {
+            weeklyStory = []
+            return
+        }
+        
+        // Calculate metrics for the past week
+        let calendar = Calendar.current
+        let today = Date()
+        let oneWeekAgo = calendar.date(byAdding: .day, value: -7, to: today)!
+        let twoWeeksAgo = calendar.date(byAdding: .day, value: -14, to: oneWeekAgo)!
+        
+        // Current week metrics
+        let currentWeekExpenses = transactions.filter { $0.type == .expense && $0.date >= oneWeekAgo && $0.date <= today }
+        let weeklySpending = currentWeekExpenses.reduce(0) { $0 + $1.amount }
+        
+        // Previous week metrics for comparison
+        let previousWeekExpenses = transactions.filter { $0.type == .expense && $0.date >= twoWeeksAgo && $0.date < oneWeekAgo }
+        let previousWeekSpending = previousWeekExpenses.reduce(0) { $0 + $1.amount }
+        
+        // Calculate change
+        let spendingChange = previousWeekSpending != 0 ? weeklySpending - previousWeekSpending : weeklySpending
+        
+        // Find top spending category
+        let expensesByCategory = Dictionary(grouping: currentWeekExpenses) { $0.category }
+        let categorySums = expensesByCategory.mapValues { transactions in
+            transactions.reduce(0) { $0 + $1.amount }
+        }
+        
+        let topCategory = categorySums.max(by: { $0.value < $1.value })
+        
+        // Calculate current balance
+        let income = transactions.filter { $0.type == .income }.reduce(0) { $0 + $1.amount }
+        let expense = transactions.filter { $0.type == .expense }.reduce(0) { $0 + $1.amount }
+        let currentBalance = income - expense
+        
+        // Create the weekly stories
+        var stories: [FinancialStory] = []
+        
+        // 1. Weekly Spending Story
+        stories.append(
+            FinancialStory(
+                title: "Weekly Spending",
+                value: "$\(String(format: "%.2f", weeklySpending))",
+                change: spendingChange >= 0 ? "+$\(String(format: "%.2f", abs(spendingChange)))" : "-$\(String(format: "%.2f", abs(spendingChange)))",
+                isPositive: spendingChange < 0, // Less spending = positive
+                emoji: "💰",
+                backgroundColor: AppTheme.primary
+            )
+        )
+        
+        // 2. Top Category Story
+        if let top = topCategory {
+            stories.append(
+                FinancialStory(
+                    title: "Top Category",
+                    value: top.key,
+                    change: "$\(String(format: "%.2f", top.value))",
+                    isPositive: false,
+                    emoji: "🛒",
+                    backgroundColor: AppTheme.secondary
+                )
+            )
+        } else {
+            stories.append(
+                FinancialStory(
+                    title: "Top Category",
+                    value: "No Expenses",
+                    change: "$0.00",
+                    isPositive: true,
+                    emoji: "🛒",
+                    backgroundColor: AppTheme.secondary
+                )
+            )
+        }
+        
+        // 3. Weekly Balance Story
+        stories.append(
+            FinancialStory(
+                title: "Weekly Balance",
+                value: "$\(String(format: "%.2f", currentBalance))",
+                change: spendingChange >= 0 ? "-$\(String(format: "%.2f", abs(spendingChange)))" : "+$\(String(format: "%.2f", abs(spendingChange)))",
+                isPositive: spendingChange < 0,
+                emoji: "✨",
+                backgroundColor: AppTheme.accent
+            )
+        )
+        
+        self.weeklyStory = stories
+    }
+    
+    func generateMonthlyStory() {
+        // Check if there are any transactions before proceeding
+        if transactions.isEmpty {
+            monthlyStory = []
+            return
+        }
+        
+        // Calculate metrics for the previous completed month, not the current one
+        let calendar = Calendar.current
+        let today = Date()
+        
+        // Get start of current month
+        let startOfCurrentMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
+        
+        // Get start of previous month
+        let startOfPreviousMonth = calendar.date(byAdding: .month, value: -1, to: startOfCurrentMonth)!
+        
+        // Get end of previous month (which is right before start of current month)
+        let endOfPreviousMonth = calendar.date(byAdding: .second, value: -1, to: startOfCurrentMonth)!
+        
+        // Get start of two months ago (for comparison)
+        let startOfTwoMonthsAgo = calendar.date(byAdding: .month, value: -1, to: startOfPreviousMonth)!
+        
+        // Current metrics now reflect the PREVIOUS month, not the current one
+        let previousMonthExpenses = transactions.filter { $0.type == .expense && $0.date >= startOfPreviousMonth && $0.date <= endOfPreviousMonth }
+        let previousMonthSpending = previousMonthExpenses.reduce(0) { $0 + $1.amount }
+        
+        // Two months ago metrics for comparison
+        let twoMonthsAgoExpenses = transactions.filter { $0.type == .expense && $0.date >= startOfTwoMonthsAgo && $0.date < startOfPreviousMonth }
+        let twoMonthsAgoSpending = twoMonthsAgoExpenses.reduce(0) { $0 + $1.amount }
+        
+        // Calculate change
+        let spendingChange = twoMonthsAgoSpending != 0 ? previousMonthSpending - twoMonthsAgoSpending : previousMonthSpending
+        
+        // Calculate savings trend for the previous month
+        let previousMonthSavings = transactions.filter { $0.type == .savings && $0.date >= startOfPreviousMonth && $0.date <= endOfPreviousMonth }.reduce(0) { $0 + $1.amount }
+        let twoMonthsAgoSavings = transactions.filter { $0.type == .savings && $0.date >= startOfTwoMonthsAgo && $0.date < startOfPreviousMonth }.reduce(0) { $0 + $1.amount }
+        let savingsChange = previousMonthSavings - twoMonthsAgoSavings
+        
+        // Calculate investment performance for the previous month
+        let previousMonthInvestments = transactions.filter { $0.type == .investment && $0.date >= startOfPreviousMonth && $0.date <= endOfPreviousMonth }.reduce(0) { $0 + $1.amount }
+        
+        // Format previous month name - explicitly using the end of previous month
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MMMM yyyy"
+        let previousMonthName = dateFormatter.string(from: startOfPreviousMonth)
+        
+        // Create monthly stories
+        var stories: [FinancialStory] = []
+        
+        // 1. Monthly Spending Story
+        stories.append(
+            FinancialStory(
+                title: "Monthly Spending",
+                value: "$\(String(format: "%.2f", previousMonthSpending))",
+                change: spendingChange >= 0 ? "+$\(String(format: "%.2f", abs(spendingChange)))" : "-$\(String(format: "%.2f", abs(spendingChange)))",
+                isPositive: spendingChange < 0, // Less spending = positive
+                emoji: "📊",
+                backgroundColor: AppTheme.primary
+            )
+        )
+        
+        // 2. Savings Story
+        stories.append(
+            FinancialStory(
+                title: "Monthly Savings",
+                value: "$\(String(format: "%.2f", previousMonthSavings))",
+                change: savingsChange >= 0 ? "+$\(String(format: "%.2f", abs(savingsChange)))" : "-$\(String(format: "%.2f", abs(savingsChange)))",
+                isPositive: savingsChange >= 0,
+                emoji: "💸",
+                backgroundColor: Color(hex: "63C7FF")
+            )
+        )
+        
+        // 3. Investment Story
+        stories.append(
+            FinancialStory(
+                title: "Investments",
+                value: "$\(String(format: "%.2f", previousMonthInvestments))",
+                change: "\(previousMonthName)",
+                isPositive: true,
+                emoji: "📈",
+                backgroundColor: Color(hex: "8676FF")
+            )
+        )
+        
+        self.monthlyStory = stories
+    }
+    // Helper methods to check if stories are available
+    func hasWeeklyStory() -> Bool {
+        return !weeklyStory.isEmpty
+    }
+    
+    func hasMonthlyStory() -> Bool {
+        return !monthlyStory.isEmpty
+    }
+}
+struct MonthlyStoryView: View {
+    @State private var currentStoryIndex = 0
+    @State private var progressValues: [CGFloat]
+    @State private var timer: Timer? = nil
+    let stories: [FinancialStory]
+    @Binding var showStories: Bool
+    @State private var isPaused = false
+    @State private var animateValue = false
+
+    init(stories: [FinancialStory], showStories: Binding<Bool>) {
+        self.stories = stories
+        self._showStories = showStories
+        self._progressValues = State(initialValue: Array(repeating: 0, count: stories.count))
+    }
+
+    var body: some View {
+        ZStack {
+            // Fallback background (in case dynamic one fails)
+            AppTheme.primary
+                .ignoresSafeArea()
+            
+            // Actual story-specific background
+            stories[currentStoryIndex].backgroundColor
+                .ignoresSafeArea()
+
+            VStack {
+                // Progress bars
+                HStack(spacing: 4) {
+                    ForEach(0..<stories.count, id: \.self) { index in
+                        GeometryReader { geometry in
+                            ZStack(alignment: .leading) {
+                                Capsule()
+                                    .foregroundColor(Color.white.opacity(0.3))
+                                    .frame(height: 4)
+
+                                Capsule()
+                                    .foregroundColor(.white)
+                                    .frame(width: geometry.size.width * progressValues[index], height: 4)
+                            }
+                        }
+                        .frame(height: 4)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+
+                // Header with Date
+                HStack {
+                    ZStack {
+                        Circle()
+                            .fill(Color.white.opacity(0.2))
+                            .frame(width: 40, height: 40)
+                        
+                        Image(systemName: "calendar.badge.clock")
+                            .foregroundColor(.white)
+                    }
+
+                    VStack(alignment: .leading) {
+                        Text("Monthly Insights")
+                            .font(.headline)
+                            .foregroundColor(.white)
+
+                        Text(monthNameFormatted())
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                    }
+
+                    Spacer()
+
+                    Button(action: { showStories = false }) {
+                        Image(systemName: "xmark")
+                            .foregroundColor(.white)
+                            .padding(8)
+                            .background(Color.white.opacity(0.2))
+                            .clipShape(Circle())
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.top, 8)
+
+                Spacer()
+
+                // Main content
+                VStack(alignment: .center, spacing: 24) {
+                    Circle()
+                        .fill(Color.white.opacity(0.2))
+                        .frame(width: 120, height: 120)
+                        .overlay(
+                            Text(stories[currentStoryIndex].emoji)
+                                .font(.system(size: 60))
+                        )
+
+                    Text(stories[currentStoryIndex].title)
+                        .font(.headline)
+                        .foregroundColor(.white.opacity(0.8))
+
+                    Text(stories[currentStoryIndex].value)
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .scaleEffect(animateValue ? 1.0 : 0.8)
+                        .opacity(animateValue ? 1.0 : 0.0)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.8), value: animateValue)
+
+                    HStack(spacing: 6) {
+                        if !stories[currentStoryIndex].title.contains("Investments") {
+                            Image(systemName: stories[currentStoryIndex].isPositive ? "arrow.up.right" : "arrow.down.right")
+                                .foregroundColor(.white)
+                                .padding(6)
+                                .background(
+                                    stories[currentStoryIndex].isPositive ?
+                                    AppTheme.incomeColor.opacity(0.7) :
+                                    AppTheme.expenseColor.opacity(0.7)
+                                )
+                                .cornerRadius(8)
+                        }
+
+                        Text(stories[currentStoryIndex].change)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.2))
+                    .cornerRadius(20)
+                }
+                .padding(.horizontal, 24)
+
+                Spacer()
+
+                // Tap areas for navigation
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .opacity(0.001)
+                        .onTapGesture { goToPreviousStory() }
+
+                    Rectangle()
+                        .opacity(0.001)
+                        .onTapGesture { goToNextStory() }
+                }
+            }
+        }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in pauseStory() }
+                .onEnded { _ in resumeStory() }
+        )
+        .onAppear {
+            startTimer()
+            withAnimation {
+                animateValue = true
+            }
+        }
+        .onDisappear {
+            timer?.invalidate()
+            timer = nil
+        }
+        .onChange(of: currentStoryIndex) { _ in
+            animateValue = false
+            Task {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                withAnimation {
+                    animateValue = true
+                }
+            }
+        }
+    }
+
+    func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            if !isPaused, progressValues[currentStoryIndex] < 1.0 {
+                progressValues[currentStoryIndex] += 0.005
+            } else if !isPaused {
+                goToNextStory()
+            }
+        }
+    }
+
+    func pauseStory() {
+        isPaused = true
+        timer?.invalidate()
+    }
+
+    func resumeStory() {
+        isPaused = false
+        startTimer()
+    }
+
+    func goToNextStory() {
+        if currentStoryIndex < stories.count - 1 {
+            progressValues[currentStoryIndex] = 1.0
+            currentStoryIndex += 1
+            startTimer()
+        } else {
+            showStories = false
+        }
+    }
+
+    func goToPreviousStory() {
+        if currentStoryIndex > 0 {
+            progressValues[currentStoryIndex] = 0
+            currentStoryIndex -= 1
+            progressValues[currentStoryIndex] = 0
+            startTimer()
+        }
+    }
+}
+private func monthNameFormatted() -> String {
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateFormat = "MMMM yyyy"
+    return dateFormatter.string(from: Date())
+}
+
+
+private func weekDateRangeFormatted() -> String {
+    let calendar = Calendar.current
+    let today = Date()
+    
+    // Find the most recent Sunday (start of week)
+    let weekday = calendar.component(.weekday, from: today)
+    let daysToSubtract = weekday == 1 ? 7 : weekday - 1
+    
+    guard let startOfWeek = calendar.date(byAdding: .day, value: -daysToSubtract, to: today) else {
+        return "This Week"
+    }
+    
+    // Find the end of week (Saturday)
+    guard let endOfWeek = calendar.date(byAdding: .day, value: 6, to: startOfWeek) else {
+        return "This Week"
+    }
+    
+    // Format the dates
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateFormat = "MMMM d"
+    
+    // For the end date, check if it's in the same month
+    let startMonth = calendar.component(.month, from: startOfWeek)
+    let endMonth = calendar.component(.month, from: endOfWeek)
+    
+    let startDateString = dateFormatter.string(from: startOfWeek)
+    
+    if startMonth == endMonth {
+        // If same month, just show the day for end date
+        dateFormatter.dateFormat = "d"
+    }
+    
+    let endDateString = dateFormatter.string(from: endOfWeek)
+    
+    return "\(startDateString) - \(endDateString)"
+}

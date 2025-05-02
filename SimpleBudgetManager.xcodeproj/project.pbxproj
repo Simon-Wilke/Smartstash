@@ -29,9 +29,22 @@
 		088CA41B2CFBF35000B362FC /* SimpleBudgetManagerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SimpleBudgetManagerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		08F952FD2D0BC560004758F9 /* Exceptions for "SimpleBudgetManager" folder in "SimpleBudgetManager" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 088CA4002CFBF34E00B362FC /* SimpleBudgetManager */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		088CA4032CFBF34E00B362FC /* SimpleBudgetManager */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				08F952FD2D0BC560004758F9 /* Exceptions for "SimpleBudgetManager" folder in "SimpleBudgetManager" target */,
+			);
 			path = SimpleBudgetManager;
 			sourceTree = "<group>";
 		};
@@ -43,6 +56,11 @@
 		088CA41E2CFBF35000B362FC /* SimpleBudgetManagerUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = SimpleBudgetManagerUITests;
+			sourceTree = "<group>";
+		};
+		08BBBB1F2D0CFB8400600C59 /* Fonts */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Fonts;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -75,10 +93,11 @@
 		088CA3F82CFBF34E00B362FC = {
 			isa = PBXGroup;
 			children = (
+				08BBBB1F2D0CFB8400600C59 /* Fonts */,
+				088CA4022CFBF34E00B362FC /* Products */,
 				088CA4032CFBF34E00B362FC /* SimpleBudgetManager */,
 				088CA4142CFBF35000B362FC /* SimpleBudgetManagerTests */,
 				088CA41E2CFBF35000B362FC /* SimpleBudgetManagerUITests */,
-				088CA4022CFBF34E00B362FC /* Products */,
 			);
 			sourceTree = "<group>";
 		};
@@ -109,6 +128,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				088CA4032CFBF34E00B362FC /* SimpleBudgetManager */,
+				08BBBB1F2D0CFB8400600C59 /* Fonts */,
 			);
 			name = SimpleBudgetManager;
 			packageProductDependencies = (
@@ -195,6 +215,8 @@
 			);
 			mainGroup = 088CA3F82CFBF34E00B362FC;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 088CA4022CFBF34E00B362FC /* Products */;
 			projectDirPath = "";
@@ -399,11 +421,15 @@
 				DEVELOPMENT_TEAM = YDA23ULP57;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SimpleBudgetManager/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Smartstash;
+				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to scan your receipt.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UILaunchStoryboardName = "Launch Screen.storyboard";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -411,9 +437,13 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = simonw.SimpleBudgetManager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
@@ -428,11 +458,15 @@
 				DEVELOPMENT_TEAM = YDA23ULP57;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SimpleBudgetManager/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Smartstash;
+				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to scan your receipt.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UILaunchStoryboardName = "Launch Screen.storyboard";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -440,9 +474,13 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = simonw.SimpleBudgetManager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
