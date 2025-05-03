@@ -578,13 +578,14 @@ struct InsightsButtonsSection: View {
     let buttons: [SummaryButton]
     let onTapWeekly: () -> Void
     let onTapMonthly: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var storyManager: StoryManager // Add storyManager as an observed object
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Insights & Reports")
                 .font(.headline)
-                .foregroundColor(AppTheme.textPrimary)
+                .foregroundColor(colorScheme == .dark ? .white : .black)
             
             VStack(spacing: 12) {
                 ForEach(buttons) { button in
@@ -781,57 +782,61 @@ import CoreHaptics
 
 struct TimeSegmentControl: View {
     @Binding var selectedTimeframe: InsightsView.Timeframe
-    @Namespace private var animation
     @State private var engine: CHHapticEngine?
     @Environment(\.colorScheme) private var colorScheme
-
+    
+    private let buttonHeight: CGFloat = 38
+    
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Time Frame")
                 .font(.headline)
+                .padding(.top, 20)
                 .foregroundColor(colorScheme == .dark ? .white : .black)
-                .padding(.top, 8)
-
-            HStack(spacing: 8) {
+            
+            HStack(spacing: 0) {
                 ForEach(InsightsView.Timeframe.allCases, id: \.self) { timeframe in
-                    Button(action: {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            selectedTimeframe = timeframe
-                            triggerHaptic()
-                        }
-                    }) {
-                        ZStack {
-                            if selectedTimeframe == timeframe {
-                                RoundedRectangle(cornerRadius: 10)
-                                    .fill(Color.accentColor)
-                                    .matchedGeometryEffect(id: "highlight", in: animation)
-                            }
-
-                            Text(timeframe.rawValue)
-                                .font(.subheadline)
-                                .fontWeight(selectedTimeframe == timeframe ? .medium : .regular)
-                                .padding(.vertical, 6)
-                                .padding(.horizontal, 14)
-                                .foregroundColor(selectedTimeframe == timeframe ? .white : (colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.8)))
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .fill(colorScheme == .dark ? Color(UIColor.systemGray6) : Color(UIColor.systemGray5))
-                                        .opacity(selectedTimeframe == timeframe ? 0 : 1)
-                                )
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
+                    timeframeButton(for: timeframe)
                 }
             }
-            .padding(.top, 4)
-            .frame(width: 300)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(colorScheme == .dark ? Color.black.opacity(0.3) : Color(UIColor.systemBackground).opacity(0.8))
+                    .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .frame(height: buttonHeight)
         }
-        .padding(.horizontal)
         .frame(width: 300)
         .onAppear {
             prepareHaptics()
         }
+    }
+    
+    private func timeframeButton(for timeframe: InsightsView.Timeframe) -> some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.5, blendDuration: 0.1)) {
+                selectedTimeframe = timeframe
+                triggerHaptic()
+            }
+        }) {
+            Text(timeframe.rawValue)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .frame(maxWidth: .infinity)
+                .frame(height: buttonHeight)
+                .background(
+                    selectedTimeframe == timeframe ?
+                        Color.accentColor :
+                        Color.clear
+                )
+                .foregroundColor(
+                    selectedTimeframe == timeframe ?
+                        .white :
+                        (colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.8))
+                )
+        }
+        .buttonStyle(PlainButtonStyle())
     }
 
     private func prepareHaptics() {
@@ -849,8 +854,8 @@ struct TimeSegmentControl: View {
         let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.5)
         let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)
         let event = CHHapticEvent(eventType: .hapticTransient,
-                                  parameters: [intensity, sharpness],
-                                  relativeTime: 0)
+                              parameters: [intensity, sharpness],
+                              relativeTime: 0)
 
         do {
             let pattern = try CHHapticPattern(events: [event], parameters: [])
@@ -1405,14 +1410,14 @@ struct DailyBreakdownCard: View {
 
             VStack(spacing: 12) {
                 HStack {
-                    Image(systemName: "arrow.down")
+                    Image(systemName: "arrow.up")
                         .font(.caption2)
                         .padding(6)
                         .background(Color.green.opacity(0.15))
                         .foregroundColor(.green)
                         .cornerRadius(8)
 
-                    Text("Income")
+                    Text("Gained")
                         .font(.caption)
                         .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
 
@@ -1425,14 +1430,14 @@ struct DailyBreakdownCard: View {
                 }
 
                 HStack {
-                    Image(systemName: "arrow.up")
+                    Image(systemName: "arrow.down")
                         .font(.caption2)
                         .padding(6)
                         .background(Color.red.opacity(0.15))
                         .foregroundColor(.red)
                         .cornerRadius(8)
 
-                    Text("Spent")
+                    Text("Lost")
                         .font(.caption)
                         .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
 

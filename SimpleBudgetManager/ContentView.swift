@@ -1295,6 +1295,151 @@ struct DotMatrixPattern: View {
         .clipped()
     }
 }
+struct UpcomingTransactionRowView: View {
+    let transaction: Transaction
+    let viewModel: BudgetViewModel
+    let colorScheme: ColorScheme
+    @State private var showingEditSheet = false
+    
+    func getIconImage(named iconName: String) -> Image? {
+        // Try to load an image from assets based on the icon name
+        if let uiImage = UIImage(named: iconName) {
+            return Image(uiImage: uiImage)
+        } else {
+            return nil
+        }
+    }
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 12) {
+                // Check if the icon is an image or text (emoji)
+                let isLogo = getIconImage(named: transaction.icon) != nil
+                
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isLogo ? Color.white : randomPaleColor())
+                    .frame(width: 36, height: 36)
+                    .overlay(
+                        Group {
+                            if let iconImage = getIconImage(named: transaction.icon) {
+                                // Display image
+                                iconImage
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 22, height: 22)
+                            } else {
+                                // Fallback to emoji text
+                                Text(transaction.icon)
+                                    .font(.system(size: 22))
+                                    .foregroundColor(colorScheme == .dark ? .white : .black)
+                            }
+                        }
+                    )
+                
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(transaction.category)
+                        .font(Font.custom("Roboto-Medium", size: 15))
+                        .foregroundColor(colorScheme == .dark ? .white : .primary)
+                    
+                    HStack(spacing: 4) {
+                        Text(formattedDate(transaction.date))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        
+                        if transaction.recurrence != .oneTime {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .foregroundColor(.secondary)
+                                .font(.system(size: 8))
+                        }
+                    }
+                }
+            }
+            
+            Spacer()
+            
+            Text(amountString(for: transaction))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule()
+                        .fill(colorForTransactionType(transaction.type).opacity(0.0))
+                )
+                .foregroundColor(colorForTransactionType(transaction.type))
+                .fontWeight(.bold)
+                .font(.system(size: 14))
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(colorScheme == .dark ? Color(hex: "#262626") : Color.white)
+                .shadow(color: colorScheme == .dark ? Color.black.opacity(0.15) : Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+        )
+        .onTapGesture {
+            showingEditSheet = true
+        }
+        .sheet(isPresented: $showingEditSheet) {
+            TransactionEditSheet(transaction: transaction, viewModel: viewModel)
+        }
+    }
+    
+    private func formattedDate(_ date: Date) -> String {
+        let today = Calendar.current.startOfDay(for: Date())
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: today)!
+        
+        if Calendar.current.isDate(date, inSameDayAs: tomorrow) {
+            return "Tomorrow"
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .none
+            return formatter.string(from: date)
+        }
+    }
+
+    private func randomPaleColor() -> Color {
+        let colors: [Color] = [
+            AppTheme.primary,
+            AppTheme.accent,
+            AppTheme.secondary,
+            Color(hex: "8676FF"),
+            Color(hex: "63C7FF")
+        ]
+        
+        let randomColor = colors.randomElement() ?? .gray
+        let opacity = colorScheme == .dark ? 0.8 : 0.5  // Full opacity in dark mode, pale in light mode
+        return randomColor.opacity(opacity)
+    }
+    
+    private func colorForTransactionType(_ type: Transaction.TransactionType) -> Color {
+        switch type {
+        case .income: return Color(hex: "#4CAF50") // Green
+        case .expense: return Color(hex: "#F44336") // Red
+        case .investment: return Color(hex: "#2196F3") // Blue
+        case .savings: return Color(hex: "#9C27B0") // Purple
+        }
+    }
+    
+    private func amountString(for transaction: Transaction) -> String {
+        let prefix = transaction.type == .income || transaction.type == .investment ? "+" : "-"
+        
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.groupingSeparator = ","
+        formatter.locale = Locale(identifier: "en_US")
+        
+        if transaction.amount < 100_000 {
+            formatter.minimumFractionDigits = transaction.amount.truncatingRemainder(dividingBy: 1) != 0 ? 2 : 0
+            formatter.maximumFractionDigits = 2
+        } else {
+            formatter.minimumFractionDigits = 0
+            formatter.maximumFractionDigits = 0
+        }
+        
+        let formattedAmount = formatter.string(from: NSNumber(value: transaction.amount)) ?? "\(transaction.amount)"
+        return "\(prefix)$\(formattedAmount)"
+    }
+}
 struct TransactionListView: View {
     @ObservedObject var viewModel: BudgetViewModel
     @Binding var selectedTimePeriod: FinancialSummaryView.TimePeriod
@@ -1306,14 +1451,15 @@ struct TransactionListView: View {
     @Binding var deletionNotificationMessage: String
     @Binding var deletedTransaction: Transaction?
     
-
     @State private var showingAllTransactionsView = false
+    @State private var showUpcomingTransactions = false
     
     @Environment(\.colorScheme) var colorScheme
 
+    // Regular transactions (non-upcoming)
     var filteredTransactions: [Transaction] {
-   
         let allTransactions = viewModel.allTransactions
+            .filter { $0.date <= Date() }  // Only past and current transactions
         
         let transactions: [Transaction]
         if let selectedType = selectedType {
@@ -1340,6 +1486,19 @@ struct TransactionListView: View {
         }
         
         return filtered.sorted(by: { $0.date > $1.date })
+    }
+    
+    // Get upcoming transactions
+    var upcomingTransactions: [Transaction] {
+        let upcoming = viewModel.allTransactions
+            .filter { $0.date > Date() }  // Only future transactions
+        
+        if let selectedType = selectedType {
+            return upcoming.filter { $0.type == selectedType }
+                .sorted(by: { $0.date < $1.date })
+        } else {
+            return upcoming.sorted(by: { $0.date < $1.date })
+        }
     }
 
     private var groupedTransactions: [Date: [Transaction]] {
@@ -1394,7 +1553,7 @@ struct TransactionListView: View {
                 if isLoading {
                     LoadingView()
                 } else {
-                    if filteredTransactions.isEmpty {
+                    if filteredTransactions.isEmpty && upcomingTransactions.isEmpty {
                         EmptyTransactionsView(
                             title: "No Transactions Yet",
                             message: "Start tracking your finances by adding a new transaction."
@@ -1426,6 +1585,77 @@ struct TransactionListView: View {
         let sortedDates = groupedTransactions.keys.sorted(by: >)
 
         List {
+            // Upcoming Transactions Section
+            if !upcomingTransactions.isEmpty {
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Upcoming")
+                                .font(Font.custom("Sora-Bold", size: 15))
+                                .foregroundColor(colorScheme == .dark ? .white : .primary)
+                            
+                            Spacer()
+                            
+                            Button(action: {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7, blendDuration: 0.15)) {
+                                    showUpcomingTransactions.toggle()
+                                }
+                            }) {
+                                Image(systemName: showUpcomingTransactions ? "chevron.up" : "chevron.down")
+                                    .foregroundColor(.secondary)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .padding(8)
+                                    .background(
+                                        Circle()
+                                            .fill(colorScheme == .dark ? Color.gray.opacity(0.2) : Color.gray.opacity(0.1))
+                                    )
+                            }
+                            .padding(.trailing, 4)
+                        }
+                        .padding(.bottom, 6)
+                        
+                        if showUpcomingTransactions {
+                            VStack(spacing: 12) {
+                                ForEach(upcomingTransactions) { transaction in
+                                    UpcomingTransactionRowView(transaction: transaction, viewModel: viewModel, colorScheme: colorScheme)
+                                        .padding(.horizontal, 2)
+                                }
+                            }
+                            .padding(.bottom, 4)
+                            .transition(
+                                .asymmetric(
+                                    insertion: .opacity.combined(with: .scale(scale: 0.97)).animation(.spring(response: 0.4, dampingFraction: 0.8, blendDuration: 0.2)),
+                                    removal: .opacity.combined(with: .scale(scale: 0.97)).animation(.spring(response: 0.35, dampingFraction: 0.8, blendDuration: 0.2))
+                                )
+                            )
+                        } else {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(Color.blue.opacity(colorScheme == .dark ? 1.0 : 0.2))
+                                    .frame(width: 8, height: 8)
+                                
+                                Text("\(upcomingTransactions.count) transactions in next \(calculateUpcomingWindow()) days")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 6)
+                            .transition(.opacity.animation(.easeInOut(duration: 0.25)))
+                        }
+                    }
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(colorScheme == .dark ? Color(hex: "#1A1A1A") : Color(hex: "#F6F6F6"))
+                            .shadow(color: colorScheme == .dark ? Color.black.opacity(0.1) : Color.black.opacity(0.03), radius: 1, x: 0, y: 1)
+                    )
+                }
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+            }
+            
+            // Regular Transactions Sections
             ForEach(sortedDates, id: \.self) { date in
                 let headerText = formattedDateHeader(for: date)
                 
@@ -1452,8 +1682,6 @@ struct TransactionListView: View {
         .scrollContentBackground(.hidden)
         .scrollIndicators(.hidden)
     }
-
-
 
     @ViewBuilder
     private func LoadingView() -> some View {
@@ -1488,20 +1716,21 @@ struct TransactionListView: View {
     }
 
     private func deleteTransaction(at offsets: IndexSet, for date: Date) {
-            guard let transactionsForDate = groupedTransactions[date] else { return }
+        guard let transactionsForDate = groupedTransactions[date] else { return }
+        
+        let transactionsToDelete = offsets.map { transactionsForDate[$0] }
+        
+        for transaction in transactionsToDelete {
+            deletedTransaction = transaction
+            viewModel.deleteTransaction(transaction)
             
-            let transactionsToDelete = offsets.map { transactionsForDate[$0] }
-            
-            for transaction in transactionsToDelete {
-                deletedTransaction = transaction
-                viewModel.deleteTransaction(transaction)
-                
-                deletionNotificationMessage = "Transaction Deleted"
-                withAnimation {
-                    showDeletionNotification = true
-                }
+            deletionNotificationMessage = "Transaction Deleted"
+            withAnimation {
+                showDeletionNotification = true
             }
         }
+    }
+    
     private func formattedDateHeader(for date: Date) -> String {
         let today = Calendar.current.startOfDay(for: Date())
         let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: today)!
@@ -1510,11 +1739,16 @@ struct TransactionListView: View {
             return "Today (\(formattedDate(date)))"
         } else if date == yesterday {
             return "Yesterday (\(formattedDate(date)))"
-        } else if date > today {
-            return "Upcoming (\(formattedDate(date)))"
         } else {
             return formattedDate(date)
         }
+    }
+    
+    private func calculateUpcomingWindow() -> Int {
+        guard let lastDate = upcomingTransactions.last?.date else { return 0 }
+        let today = Calendar.current.startOfDay(for: Date())
+        let days = Calendar.current.dateComponents([.day], from: today, to: lastDate).day ?? 0
+        return max(days, 1)
     }
 
     private func formattedDate(_ date: Date) -> String {
@@ -1522,6 +1756,26 @@ struct TransactionListView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: date)
+    }
+    
+    private func amountString(for transaction: Transaction) -> String {
+        let prefix = transaction.type == .income || transaction.type == .investment ? "+" : "-"
+        
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.groupingSeparator = ","
+        formatter.locale = Locale(identifier: "en_US")
+        
+        if transaction.amount < 100_000 {
+            formatter.minimumFractionDigits = transaction.amount.truncatingRemainder(dividingBy: 1) != 0 ? 2 : 0
+            formatter.maximumFractionDigits = 2
+        } else {
+            formatter.minimumFractionDigits = 0
+            formatter.maximumFractionDigits = 0
+        }
+        
+        let formattedAmount = formatter.string(from: NSNumber(value: transaction.amount)) ?? "\(transaction.amount)"
+        return "\(prefix)$\(formattedAmount)"
     }
 }
 struct CustomLoadingSpinner: View {
@@ -1781,8 +2035,6 @@ struct EmptyTransactionsView: View {
         .padding(.top, -20) // Adjust the top padding to fine-tune vertical position
     }
 }
-import SwiftUI
-
 struct FilterButton: View {
     let title: String
     var isSelected: Bool
@@ -2679,7 +2931,7 @@ struct ContentView: View {
                             .environmentObject(BudgetViewModel())
                     }
                     .tabItem {
-                        Label("Settings", systemImage: "gearshape.fill")
+                        Label("More", systemImage: "line.horizontal.3")
                     }
                     .tag(3)
                 }
@@ -2953,66 +3205,110 @@ struct ContentView: View {
             isLongPressing = false
         }
     }
-
-
-
     private var deletionNotificationView: some View {
         VStack {
             if showDeletionNotification {
-                HStack(spacing: 12) {
-                    // Circular Icon
-                    Image(systemName: "arrow.uturn.left.circle.fill")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundColor(.red)
-                        .padding(10)
-                        .background(Circle().fill(Color.red.opacity(0.15)))
-
-                    // Notification Text
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(deletionNotificationMessage)
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                            .foregroundColor(colorScheme == .dark ? .white : .black)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-
-                        Text("Tap to undo")
-                            .font(.footnote)
-                            .foregroundColor(.gray)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-
-                    Spacer()
-
-                    // Close Button
-                    Button {
-                        withAnimation { showDeletionNotification = false }
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(.gray)
+                NotificationBanner(
+                    icon: "arrow.uturn.left.circle.fill",
+                    title: deletionNotificationMessage,
+                    subtitle: "Tap to undo",
+                    onClose: {
+                        withAnimation(.easeOut(duration: 0.35)) {
+                            showDeletionNotification = false
+                        }
+                    },
+                    onTap: undoDeleteTransaction
+                )
+                .transition(
+                    .asymmetric(
+                        insertion: AnyTransition.scale(scale: 0.95)
+                            .combined(with: .move(edge: .top))
+                            .combined(with: .opacity),
+                        removal: AnyTransition.opacity
+                            .animation(.easeOut(duration: 0.25))
+                    )
+                )
+                .zIndex(1)
+                .task {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    withAnimation(.easeOut(duration: 0.35)) {
+                        showDeletionNotification = false
                     }
                 }
-                .padding(12)
-                .background(colorScheme == .dark ? Color.black.opacity(0.85) : Color.white)
-                .cornerRadius(10)
-                .onTapGesture { undoDeleteTransaction() }
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .padding(.horizontal)
-                .zIndex(1)
-
-                Spacer()
+                
+                Spacer() // This pushes the notification to the top
             }
         }
-        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: showDeletionNotification)
-        .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                withAnimation { showDeletionNotification = false }
-            }
-        }
+        .animation(
+            .interpolatingSpring(
+                mass: 0.8,
+                stiffness: 100,
+                damping: 15,
+                initialVelocity: 0.5
+            ),
+            value: showDeletionNotification
+        )
     }
 
+    /// Reusable notification banner component with consistent styling
+    struct NotificationBanner: View {
+        let icon: String
+        let title: String
+        let subtitle: String
+        let onClose: () -> Void
+        let onTap: () -> Void
+        
+        @Environment(\.colorScheme) private var colorScheme
+        
+        var body: some View {
+            HStack(spacing: 12) {
+                // Icon
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.red)
+                    .frame(width: 40, height: 40)
+                    .background(Circle().fill(Color.red.opacity(0.15)))
+                
+                // Content
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                
+                Spacer()
+                
+                // Close button
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(12)
+            .background {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(colorScheme == .dark ?
+                          Color.black.opacity(0.85) :
+                          Color.white)
+                    .shadow(color: colorScheme == .dark ?
+                            .black.opacity(0.25) :
+                            .black.opacity(0.1),
+                            radius: 10, y: 4)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTap)
+            .padding(.horizontal)
+        }
+    }
 
     private var timePeriodMenu: some View {
         let feedbackGenerator = UIImpactFeedbackGenerator(style: .light)

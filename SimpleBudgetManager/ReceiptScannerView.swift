@@ -25,6 +25,391 @@ class TransactionCoordinator: ObservableObject {
     }
 }
 
+import SwiftUI
+import Vision
+import UIKit
+
+// First, add the ReceiptOCRManager class
+class ReceiptOCRManager {
+    // MARK: - Properties
+    private var isProcessing: Bool = false
+    private var recognizedTotal: String = ""
+    private var showingResults: Bool = false
+    private var onCompletion: ((String, Bool) -> Void)?
+
+    // MARK: - Public methods
+    func scanReceipt(from image: UIImage, completion: @escaping (String, Bool) -> Void) {
+        isProcessing = true
+        onCompletion = completion
+        recognizeTextFromImage(image)
+    }
+
+    // MARK: - Private methods
+    private func recognizeTextFromImage(_ image: UIImage) {
+        guard let cgImage = image.cgImage else {
+            completeProcess(with: "Invalid image", success: false)
+            return
+        }
+        
+        // Create a new Vision text recognition request
+        let request = VNRecognizeTextRequest { [weak self] request, error in
+            guard let self = self, error == nil, let observations = request.results as? [VNRecognizedTextObservation] else {
+                self?.completeProcess(with: "Text recognition failed", success: false)
+                return
+            }
+            
+            // Extract text with locations for better context analysis
+            var textBlocks: [(text: String, boundingBox: CGRect)] = []
+            
+            for observation in observations {
+                if let candidate = observation.topCandidates(1).first {
+                    // Convert normalized coordinates to points in the image
+                    let boundingBox = observation.boundingBox
+                    textBlocks.append((text: candidate.string, boundingBox: boundingBox))
+                }
+            }
+            
+            // Sort text blocks by vertical position (top to bottom)
+            let sortedBlocks = textBlocks.sorted { $0.boundingBox.minY > $1.boundingBox.minY }
+            
+            // Process all recognized text with position information
+            let recognizedText = sortedBlocks.map { $0.text }.joined(separator: "\n")
+            
+            // Extract total using multiple strategies
+            self.extractTotal(from: recognizedText, sortedBlocks: sortedBlocks)
+        }
+        
+        // Configure the text recognition request for better accuracy
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        request.recognitionLanguages = ["en-US"]  // Set appropriate language for better recognition
+        
+        // Create a request handler and perform the request
+        let requestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try requestHandler.perform([request])
+            } catch {
+                print("Error performing OCR: \(error)")
+                self.completeProcess(with: "OCR processing failed", success: false)
+            }
+        }
+    }
+    
+    private func extractTotal(from text: String, sortedBlocks: [(text: String, boundingBox: CGRect)]) {
+        // Try multiple strategies to find the most likely total
+        var potentialTotals: [(amount: String, confidence: Double)] = []
+        
+        // Strategy 1: Position-aware pattern matching (focus on bottom of receipt)
+        potentialTotals.append(contentsOf: findTotalsByPosition(in: sortedBlocks))
+        
+        // Strategy 2: Keyword-based pattern matching with prioritization
+        potentialTotals.append(contentsOf: findTotalsByKeywords(in: text))
+        
+        // Strategy 3: Amount format validation
+        potentialTotals.append(contentsOf: findAllPossibleAmounts(in: text))
+        
+        // Strategy 4: Structural analysis - usually the final amount is near the bottom after subtotal
+        if let structuralTotal = findTotalByStructure(in: sortedBlocks) {
+            potentialTotals.append((structuralTotal, 0.9))
+        }
+        
+        // Sort potential totals by confidence and select the best one
+        let sortedTotals = potentialTotals.sorted { $0.confidence > $1.confidence }
+        
+        if let bestMatch = sortedTotals.first {
+            // Format the total amount properly
+            let formattedTotal = formatCurrency(bestMatch.amount)
+            completeProcess(with: formattedTotal, success: true)
+        } else {
+            completeProcess(with: "No total found", success: false)
+        }
+    }
+    
+    private func findTotalsByPosition(in blocks: [(text: String, boundingBox: CGRect)]) -> [(amount: String, confidence: Double)] {
+        var results: [(amount: String, confidence: Double)] = []
+        
+        // Focus on the bottom third of the receipt where total is typically found
+        let bottomBlocks = blocks.prefix(blocks.count / 3)
+        
+        for (index, block) in bottomBlocks.enumerated() {
+            let text = block.text.lowercased()
+            
+            // Keywords that likely indicate a total amount
+            let totalKeywords = ["total", "amount due", "amount paid", "grand total", "visa", "mastercard", "amex", "payment"]
+            let subtotalKeywords = ["subtotal", "sub-total", "pre-tax", "before tax"]
+            
+            // Check if this block contains any total-related keywords
+            var isTotal = false
+            var isSubtotal = false
+            
+            for keyword in totalKeywords {
+                if text.contains(keyword) {
+                    isTotal = true
+                    break
+                }
+            }
+            
+            for keyword in subtotalKeywords {
+                if text.contains(keyword) {
+                    isSubtotal = true
+                    break
+                }
+            }
+            
+            // If this is a subtotal line, skip it
+            if isSubtotal && !isTotal {
+                continue
+            }
+            
+            // If this is a total line or payment method line, look for amount
+            if isTotal {
+                // Try to extract amount from this line
+                if let amount = extractAmountFromLine(text) {
+                    // Higher confidence for blocks with explicit "total" mentioned
+                    let confidence = text.contains("total") ? 0.95 : 0.85
+                    results.append((amount, confidence))
+                }
+                
+                // Also check the next line in case the amount is on a separate line
+                if index < bottomBlocks.count - 1 {
+                    let nextLine = bottomBlocks[index + 1].text
+                    if let amount = extractAmountFromLine(nextLine) {
+                        results.append((amount, 0.8))
+                    }
+                }
+            }
+        }
+        
+        // Check the last few lines for potential totals - often the very last amount is the total
+        for block in bottomBlocks.prefix(5) {
+            if let amount = extractAmountFromLine(block.text) {
+                // Lower confidence for generic amounts, but still consider them
+                results.append((amount, 0.6))
+            }
+        }
+        
+        return results
+    }
+    
+    private func findTotalsByKeywords(in text: String) -> [(amount: String, confidence: Double)] {
+        var results: [(amount: String, confidence: Double)] = []
+        
+        // High-priority patterns (explicit total indicators)
+        let highPriorityPatterns = [
+            "(?i)total\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
+            "(?i)grand\\s*total\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
+            "(?i)amount\\s*due\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
+            "(?i)amount\\s*paid\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
+            "(?i)to\\s*pay\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
+            "(?i)balance\\s*due\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
+            "(?i)charged\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})"
+        ]
+        
+        // Payment method related patterns
+        let paymentPatterns = [
+            "(?i)visa\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
+            "(?i)mastercard\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
+            "(?i)amex\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
+            "(?i)credit\\s*card\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
+            "(?i)payment\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
+            "(?i)card\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})"
+        ]
+        
+        // Run high priority patterns first
+        for pattern in highPriorityPatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                let nsString = text as NSString
+                let range = NSRange(location: 0, length: nsString.length)
+                
+                let matches = regex.matches(in: text, range: range)
+                for match in matches {
+                    if match.numberOfRanges > 1 {
+                        let matchRange = match.range(at: 1)
+                        if matchRange.location != NSNotFound {
+                            let totalString = nsString.substring(with: matchRange)
+                            results.append((totalString, 0.9))
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Then try payment patterns
+        for pattern in paymentPatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                let nsString = text as NSString
+                let range = NSRange(location: 0, length: nsString.length)
+                
+                let matches = regex.matches(in: text, range: range)
+                for match in matches {
+                    if match.numberOfRanges > 1 {
+                        let matchRange = match.range(at: 1)
+                        if matchRange.location != NSNotFound {
+                            let totalString = nsString.substring(with: matchRange)
+                            results.append((totalString, 0.8))
+                        }
+                    }
+                }
+            }
+        }
+        
+        return results
+    }
+    
+    private func findAllPossibleAmounts(in text: String) -> [(amount: String, confidence: Double)] {
+        var results: [(amount: String, confidence: Double)] = []
+        
+        // Generic currency amount patterns
+        let currencyPatterns = [
+            // Currency symbol followed by digits
+            "\\$\\s*([0-9]+[.,][0-9]{2})",
+            // Number with decimal point or comma in currency format
+            "([0-9]+[.,][0-9]{2})\\s*\\$",
+            // Plain number with decimal point that looks like currency
+            "([0-9]+\\.[0-9]{2})"
+        ]
+        
+        let nsString = text as NSString
+        let lines = text.components(separatedBy: .newlines)
+        
+        // Parse each line separately to maintain context
+        for (lineIndex, line) in lines.enumerated() {
+            // Skip lines with subtotal
+            if line.lowercased().contains("subtotal") || line.lowercased().contains("sub-total") {
+                continue
+            }
+            
+            for pattern in currencyPatterns {
+                if let regex = try? NSRegularExpression(pattern: pattern) {
+                    let lineRange = NSRange(location: 0, length: line.count)
+                    
+                    let matches = regex.matches(in: line, range: lineRange)
+                    for match in matches {
+                        if match.numberOfRanges > 1 {
+                            let matchRange = match.range(at: 1)
+                            if matchRange.location != NSNotFound {
+                                let amountString = (line as NSString).substring(with: matchRange)
+                                
+                                // Calculate confidence based on position and context
+                                var confidence = 0.3  // Base confidence for a currency-formatted number
+                                
+                                // Higher confidence for amounts at the end of the receipt
+                                if lineIndex > lines.count * 2/3 {
+                                    confidence += 0.2
+                                }
+                                
+                                // Higher confidence if line contains total-related terms
+                                let lowerLine = line.lowercased()
+                                if lowerLine.contains("total") || lowerLine.contains("balance") ||
+                                   lowerLine.contains("amount") || lowerLine.contains("pay") {
+                                    confidence += 0.3
+                                }
+                                
+                                results.append((amountString, confidence))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        return results
+    }
+    
+    private func findTotalByStructure(in blocks: [(text: String, boundingBox: CGRect)]) -> String? {
+        // Look for patterns in the receipt structure:
+        // 1. Usually there's subtotal first
+        // 2. Then tax
+        // 3. Then total/amount due
+        
+        var foundSubtotal = false
+        var foundTax = false
+        var lastAmount: String?
+        
+        for block in blocks {
+            let text = block.text.lowercased()
+            
+            // Check for subtotal indicators
+            if text.contains("subtotal") || text.contains("sub-total") || text.contains("sub total") {
+                foundSubtotal = true
+                continue
+            }
+            
+            // Check for tax indicators
+            if text.contains("tax") || text.contains("vat") || text.contains("gst") || text.contains("hst") {
+                foundTax = true
+                continue
+            }
+            
+            // After seeing subtotal and possibly tax, the next amount is likely the total
+            if foundSubtotal {
+                if let amount = extractAmountFromLine(text) {
+                    lastAmount = amount
+                    
+                    // If this line contains "total" and we already found subtotal, high chance this is it
+                    if text.contains("total") || text.contains("amount due") || text.contains("balance") {
+                        return amount
+                    }
+                }
+            }
+        }
+        
+        // If we've seen subtotal and tax, the last amount found is likely the total
+        if foundSubtotal && foundTax && lastAmount != nil {
+            return lastAmount
+        }
+        
+        // Otherwise, just return the last amount we found near the bottom
+        return lastAmount
+    }
+    
+    private func extractAmountFromLine(_ line: String) -> String? {
+        // Pattern for currency amounts
+        let pattern = "([0-9]+[.,][0-9]{2})"
+        
+        if let regex = try? NSRegularExpression(pattern: pattern) {
+            let nsString = line as NSString
+            let range = NSRange(location: 0, length: nsString.length)
+            
+            // Find all matches and return the last one (usually the actual amount)
+            let matches = regex.matches(in: line, range: range)
+            if let lastMatch = matches.last, lastMatch.numberOfRanges > 1 {
+                let matchRange = lastMatch.range(at: 1)
+                if matchRange.location != NSNotFound {
+                    return nsString.substring(with: matchRange)
+                }
+            }
+        }
+        
+        return nil
+    }
+    
+    private func formatCurrency(_ amount: String) -> String {
+        // Clean up the amount string
+        var cleanAmount = amount.replacingOccurrences(of: ",", with: ".")
+        
+        // Make sure it's a valid decimal
+        if let value = Double(cleanAmount) {
+            // Format with 2 decimal places
+            return String(format: "%.2f", value)
+        }
+        
+        return amount
+    }
+    
+    private func completeProcess(with result: String, success: Bool) {
+        DispatchQueue.main.async {
+            self.recognizedTotal = result
+            self.isProcessing = false
+            self.showingResults = true
+            self.onCompletion?(result, success)
+        }
+    }
+}
+
+// Now update the ReceiptScannerView to use the OCR manager
 struct ReceiptScannerView: View {
     @StateObject var coordinator = TransactionCoordinator()
     @State private var showingCamera = false
@@ -35,6 +420,9 @@ struct ReceiptScannerView: View {
     @State private var showingResults = false
     @ObservedObject var viewModel: BudgetViewModel
     @Binding var isPresented: Bool
+    
+    // Create OCR manager
+    private let ocrManager = ReceiptOCRManager()
     
     var body: some View {
         NavigationView {
@@ -122,7 +510,7 @@ struct ReceiptScannerView: View {
                                 .foregroundColor(bluePurpleColor)
                         }
                         .padding(.vertical, 20)
-                                                    .onAppear {
+                        .onAppear {
                             // Ensure animations start when view appears
                             animationTrigger = true
                         }
@@ -164,7 +552,8 @@ struct ReceiptScannerView: View {
                 CustomCameraView(image: $scannedImage, onImageCaptured: {
                     self.isProcessing = true
                     if let image = scannedImage {
-                        recognizeTextFromImage(image)
+                        // Use enhanced OCR manager instead of the old method
+                        processReceiptImage(image)
                     }
                 })
             }
@@ -187,79 +576,16 @@ struct ReceiptScannerView: View {
         }
     }
     
-    private func recognizeTextFromImage(_ image: UIImage) {
-        guard let cgImage = image.cgImage else {
-            isProcessing = false
-            return
-        }
-        
-        // Create a new Vision text recognition request
-        let request = VNRecognizeTextRequest { request, error in
-            guard error == nil, let observations = request.results as? [VNRecognizedTextObservation] else {
-                isProcessing = false
-                return
-            }
-            
-            // Process all recognized text
-            let recognizedText = observations.compactMap { observation in
-                return observation.topCandidates(1).first?.string
-            }.joined(separator: "\n")
-            
-            // Extract the total amount from the recognized text
-            self.extractTotal(from: recognizedText)
-        }
-        
-        // Configure the text recognition request
-        request.recognitionLevel = .accurate
-        
-        // Create a request handler and perform the request
-        let requestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                try requestHandler.perform([request])
-            } catch {
-                print("Error performing OCR: \(error)")
-            }
-        }
-    }
-    
-    private func extractTotal(from text: String) {
-        // Common patterns for total amounts on receipts
-        let patterns = [
-            "(?i)total\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)amount\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)subtotal\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)\\$\\s*([0-9]+[.,][0-9]{2})"
-        ]
-        
-        for pattern in patterns {
-            if let regex = try? NSRegularExpression(pattern: pattern) {
-                let nsString = text as NSString
-                let range = NSRange(location: 0, length: nsString.length)
-                
-                if let match = regex.firstMatch(in: text, range: range) {
-                    let matchRange = match.range(at: 1)
-                    if matchRange.location != NSNotFound {
-                        let totalString = nsString.substring(with: matchRange)
-                        DispatchQueue.main.async {
-                            self.recognizedTotal = totalString
-                            self.isProcessing = false
-                            self.showingResults = true
-                        }
-                        return
-                    }
-                }
-            }
-        }
-        
-        // If no total is found
-        DispatchQueue.main.async {
-            self.recognizedTotal = "No total found"
+    // New method using the OCR Manager
+    private func processReceiptImage(_ image: UIImage) {
+        ocrManager.scanReceipt(from: image) { (extractedTotal, success) in
+            self.recognizedTotal = extractedTotal
             self.isProcessing = false
             self.showingResults = true
         }
     }
+    
+    
 }
 struct ResultsView: View {
     @Binding var recognizedTotal: String?

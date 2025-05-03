@@ -20,6 +20,7 @@ struct SettingsView: View {
     @EnvironmentObject var budgetViewModel: BudgetViewModel
     @State private var showingCSVMapping = false
     @State private var showingDocumentPicker = false // New property to control document picker
+    @State private var showingColumnMapping = false
 
     // Delete All Transactions Confirmation
     @State private var showDeleteAllAlert = false
@@ -139,26 +140,25 @@ struct SettingsView: View {
                 DocumentPicker(csvData: $importedCSVData)
                     .onDisappear {
                         if let csvData = importedCSVData {
-                            // Instead of showing mapping view, directly parse and import
-                            let result = parseCSV(csvData)
-                            switch result {
-                            case .success(let transactions):
-                                importedTransactions = transactions
-                                if !importedTransactions.isEmpty {
-                                    for transaction in importedTransactions {
-                                        budgetViewModel.addTransaction(transaction)
-                                    }
-                                    showImportSuccess = true
-                                } else {
-                                    importError = "No valid transactions found in CSV file."
-                                    showImportError = true
-                                }
-                            case .failure(let error):
-                                importError = error.localizedDescription
-                                showImportError = true
-                            }
+                            // Show column mapping view instead of direct parsing
+                            showingColumnMapping = true
                         }
                     }
+            }
+            .sheet(isPresented: $showingColumnMapping) {
+                CSVColumnMappingView(isPresented: $showingColumnMapping, csvData: $importedCSVData) { mappedTransactions in
+                    // Handle the returned transactions
+                    importedTransactions = mappedTransactions
+                    if !importedTransactions.isEmpty {
+                        for transaction in importedTransactions {
+                            budgetViewModel.addTransaction(transaction)
+                        }
+                        showImportSuccess = true
+                    } else {
+                        importError = "No valid transactions found in CSV file."
+                        showImportError = true
+                    }
+                }
             }
             .alert("Import Successful", isPresented: $showImportSuccess) {
                 Button("OK", role: .cancel) { }
