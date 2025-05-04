@@ -386,117 +386,121 @@ struct AllTransactionsView: View {
         return formatter.string(from: date)
     }
     
-    // Enhanced search bar with suggestions
     private var enhancedSearchBar: some View {
-        VStack(spacing: 0) {
-            HStack {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.gray)
-                    
-                    TextField("Search transactions", text: $searchText)
-                        .textFieldStyle(PlainTextFieldStyle())
-                        .focused($isSearchFocused)
-                        .padding(.vertical, 4)
-                        .autocorrectionDisabled(true)
-                        .onChange(of: searchText) { oldValue, newValue in
-                            if !newValue.isEmpty {
-                                updateSearchSuggestions()
-                            }
-                        }
-                        .onSubmit {
-                            if !searchText.isEmpty {
-                                addToRecentSearches(searchText)
+            VStack(spacing: 0) {
+                HStack {
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.gray)
+                            .font(.system(size: 14))
+                            .padding(.leading, 4)
+                        
+                        TextField("Search by category or notes", text: $searchText)
+                            .textFieldStyle(PlainTextFieldStyle())
+                            .focused($isSearchFocused)
+                            .padding(.vertical, 6)
+                            .autocorrectionDisabled(true)
+                        
+                        if !searchText.isEmpty {
+                            Button(action: {
+                                searchText = ""
                                 showSuggestions = false
+                                let generator = UIImpactFeedbackGenerator(style: .light)
+                                generator.impactOccurred()
+                            }) {
+                                ZStack {
+                                    Circle()
+                                        .fill(Color.gray.opacity(0.15))
+                                        .frame(width: 20, height: 20)
+                                        .padding(.trailing, 4)
+                                    
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundColor(.gray)
+                                        .padding(.trailing, 4)
+                                }
                             }
+                            .transition(.scale.combined(with: .opacity))
+                            .buttonStyle(PlainButtonStyle())
                         }
-                    
-                    if !searchText.isEmpty {
-                        Button(action: {
-                            searchText = ""
-                            showSuggestions = false
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.gray)
-                                .padding(.trailing, 6)
-                        }
-                        .buttonStyle(PlainButtonStyle())
+                    }
+                    .padding(6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(colorScheme == .dark ? Color.black.opacity(0.3) : Color(UIColor.secondarySystemBackground))
+                    )
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+            }
+        }
+    
+    // Enhanced search suggestions overlay
+        private var searchSuggestionsOverlay: some View {
+            VStack(spacing: 0) {
+                Spacer().frame(height: 0)
+                
+                VStack(alignment: .leading, spacing: 0) {
+                    // Display search suggestions
+                    ForEach(searchSuggestions.prefix(4), id: \.self) { suggestion in
+                        suggestionRow(suggestion, isRecent: false)
                     }
                 }
-                .padding(8)
-                .background(colorScheme == .dark ? Color.black.opacity(0.2) : Color(UIColor.secondarySystemBackground))
-                .cornerRadius(10)
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 6)
-        }
-    }
-    
-    private var searchSuggestionsOverlay: some View {
-        VStack(spacing: 0) {
-            Spacer().frame(height: 0)
-            
-            VStack(alignment: .leading, spacing: 0) {
-                // Display up to 4 search suggestions
-                ForEach(searchSuggestions.prefix(4), id: \.self) { suggestion in
-                    suggestionRow(suggestion, isRecent: false)
-                }
-            }
-            .background(colorScheme == .dark ? Color(UIColor.systemBackground) : Color.white)
-            .cornerRadius(10)
-            .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 5)
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, alignment: .center)
-            
-            Spacer()
-        }
-    }
-    
-    private func suggestionRow(_ suggestion: String, isRecent: Bool) -> some View {
-        Button(action: {
-            searchText = suggestion
-            addToRecentSearches(suggestion)
-            showSuggestions = false
-            isSearchFocused = false
-        }) {
-            HStack {
-                Image(systemName: isRecent ? "clock" : "magnifyingglass")
-                    .font(.system(size: 14))
-                    .foregroundColor(.gray)
-                    .frame(width: 20)
-                
-                Text(suggestion)
-                    .font(.custom("Roboto-Regular", size: 14))
-                    .foregroundColor(colorScheme == .dark ? .white : .black)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(colorScheme == .dark ? Color(UIColor.systemBackground) : Color.white)
+                        .shadow(color: Color.black.opacity(0.15), radius: 8, x: 0, y: 5)
+                )
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity, alignment: .center)
                 
                 Spacer()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
-        .background(
-            GeometryReader { geometry in
-                Color.clear.preference(key: BoundsPreferenceKey.self, value: geometry.frame(in: .local))
-                    .onPreferenceChange(BoundsPreferenceKey.self) { _ in
-                        // This keeps track of suggestion row bounds for proper sizing
-                    }
+        
+        // Enhanced suggestion row with improved styling
+        private func suggestionRow(_ suggestion: String, isRecent: Bool) -> some View {
+            Button(action: {
+                searchText = suggestion
+                addToRecentSearches(suggestion)
+                showSuggestions = false
+                isSearchFocused = false
+            }) {
+                HStack {
+                    Image(systemName: isRecent ? "clock" : "magnifyingglass")
+                        .font(.system(size: 14))
+                        .foregroundColor(.gray)
+                        .frame(width: 24)
+                    
+                    Text(suggestion)
+                        .font(.system(size: 15))
+                        .foregroundColor(colorScheme == .dark ? .white : .black)
+                    
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
             }
-        )
-    }
+            .background(Color.clear)
+        }
+        
     
+    // Updated LoadingView component
     @ViewBuilder
     private func LoadingView() -> some View {
         VStack {
-            AllTransactionsCustomLoadingSpinner()
+            BouncingCirclesLoadingView()
                 .frame(width: 100, height: 100)
                 .padding()
-            Text("Loading Up!").font(Font.custom("Sora-Bold", size: 20))
+            Text("").font(Font.custom("Sora-Bold", size: 20))
                 .font(.subheadline)
                 .foregroundColor(.gray)
                 .padding(.top, -50)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+
     
     @ViewBuilder
     private func FlatTransactionListViewContent() -> some View {
@@ -697,7 +701,7 @@ struct AllTransactionsView: View {
     private func simulateLoading() {
         isLoading = true
         let shouldDelay = Double.random(in: 0...1) < 0.1 // 10% chance to delay
-        let randomDelay = shouldDelay ? Double.random(in: 0...2) : 0
+        let randomDelay = shouldDelay ? Double.random(in: 4...10) : 0
         DispatchQueue.main.asyncAfter(deadline: .now() + randomDelay) {
             isLoading = false
         }
@@ -814,23 +818,49 @@ struct TransactionFilterButton: View {
     }
 }
 
-struct AllTransactionsCustomLoadingSpinner: View {
-    @State private var rotation: Double = 0
-    @Environment(\.colorScheme) var colorScheme
+import SwiftUI
 
+struct BouncingCirclesLoadingView: View {
+    @State private var isAnimating = false
+    @Environment(\.colorScheme) var colorScheme
+    
+    let circleColors: [Color] = [.primaryBluePurple, .primaryBluePurple, .primaryBluePurple, .primaryBluePurple]
+    let animationDuration: Double = 0.6
+    
     var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.8)
-            .stroke(style: StrokeStyle(lineWidth: 5, lineCap: .round))
-            .foregroundColor(colorScheme == .dark ? bluePurpleColor : bluePurpleColor)
-            .rotationEffect(.degrees(rotation))
-            .frame(width: 50, height: 50)
-            .onAppear {
-                withAnimation(Animation.linear(duration: 1).repeatForever(autoreverses: false)) {
-                    rotation = 360
+        VStack {
+            HStack(spacing: 12) {
+                ForEach(0..<4) { index in
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [circleColors[index], circleColors[index].opacity(0.6)]),
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 20, height: 20)
+                        .offset(y: isAnimating ? -15 : 0)
+                        .animation(
+                            Animation
+                                .easeInOut(duration: animationDuration)
+                                .repeatForever(autoreverses: true)
+                                .delay(Double(index) * (animationDuration / 4)),
+                            value: isAnimating
+                        )
+                        .shadow(color: circleColors[index].opacity(0.3), radius: 2, y: 2)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.top, -90)
+            .padding()
+            
+            Text("Loading!")
+                .font(Font.custom("Sora-Bold", size: 20))
+                .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .gray)
+                .padding(.top, 10)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            isAnimating = true
+        }
     }
 }

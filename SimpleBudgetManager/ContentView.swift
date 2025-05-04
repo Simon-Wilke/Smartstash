@@ -1002,7 +1002,7 @@ struct TrendCard: View {
         Button(action: onTap) {
             VStack(spacing: 4) {
                 HStack {
-                    Image(systemName: trendPercentage >= 0 ? "arrow.up.right.circle.fill" : "arrow.down.right.circle.fill")
+                    Image(systemName: trendPercentage >= 0 ? "chart.line.uptrend.xyaxis" : "chart.line.downtrend.xyaxis")
                         .font(.headline)
                         .foregroundColor(color)
                     Text("Trend")
@@ -1038,7 +1038,7 @@ struct ExpandedTrendCard: View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Image(systemName: trendPercentage >= 0 ? "arrow.up.right.circle.fill" : "arrow.down.right.circle.fill")
+                    Image(systemName: trendPercentage >= 0 ? "chart.line.uptrend.xyaxis" : "chart.line.downtrend.xyaxis")
                         .font(.headline)
                         .foregroundColor(color)
                     Text("Trend Analysis")
@@ -1289,7 +1289,7 @@ struct DotMatrixPattern: View {
                         x: CGFloat(column) * spacing,
                         y: CGFloat(row) * spacing
                     )
-                    .foregroundColor(.gray.opacity(0.05))
+                    .foregroundColor(.gray.opacity(0.06))
             }
         }
         .clipped()
@@ -1551,7 +1551,7 @@ struct TransactionListView: View {
 
             ZStack {
                 if isLoading {
-                    LoadingView()
+                    BouncingCirclesLoadingView()
                 } else {
                     if filteredTransactions.isEmpty && upcomingTransactions.isEmpty {
                         EmptyTransactionsView(
@@ -1686,10 +1686,10 @@ struct TransactionListView: View {
     @ViewBuilder
     private func LoadingView() -> some View {
         VStack {
-            CustomLoadingSpinner()
+            BouncingCirclesLoadingView()
                 .frame(width: 100, height: 100)
                 .padding()
-            Text("Loading Up!").font(Font.custom("Sora-Bold", size: 20))
+            Text("Hustle mode: activated…").font(Font.custom("Sora-Bold", size: 20))
                 .font(.subheadline)
                 .foregroundColor(.gray)
                 .padding(.top, -50)
@@ -1700,7 +1700,7 @@ struct TransactionListView: View {
     private func simulateLoading() {
         isLoading = true
         let shouldDelay = Double.random(in: 0...1) < 0.1 // 10% chance to delay
-        let randomDelay = shouldDelay ? Double.random(in: 0...2) : 0
+        let randomDelay = shouldDelay ? Double.random(in: 4...8) : 0
         DispatchQueue.main.asyncAfter(deadline: .now() + randomDelay) {
             isLoading = false
         }
@@ -1778,26 +1778,7 @@ struct TransactionListView: View {
         return "\(prefix)$\(formattedAmount)"
     }
 }
-struct CustomLoadingSpinner: View {
-    @State private var rotation: Double = 0
-    @Environment(\.colorScheme) var colorScheme
 
-    var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.8)
-            .stroke(style: StrokeStyle(lineWidth: 5, lineCap: .round))
-            .foregroundColor(colorScheme == .dark ? bluePurpleColor : bluePurpleColor)
-            .rotationEffect(.degrees(rotation))
-            .frame(width: 50, height: 50)
-            .onAppear {
-                withAnimation(Animation.linear(duration: 1).repeatForever(autoreverses: false)) {
-                    rotation = 360
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.top, -90)
-    }
-}
 
 import SwiftUI
 

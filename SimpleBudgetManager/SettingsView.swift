@@ -1145,193 +1145,387 @@ struct CSVColumnMappingView: View {
         }
     }
     
-    // Parse transactions with user-defined column mappings
-        private func parseTransactionsWithMappings(_ csvString: String) -> Result<[Transaction], Error> {
-            let rows = csvString.components(separatedBy: .newlines)
-                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    // Inside your CSVColumnMappingView struct, replace the parseTransactionsWithMappings function with this improved version:
+
+    private func parseTransactionsWithMappings(_ csvString: String) -> Result<[Transaction], Error> {
+        let rows = csvString.components(separatedBy: .newlines)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        
+        // Skip header row
+        guard rows.count > 1 else {
+            return .failure(CSVParseError.emptyFile)
+        }
+        
+        var transactions: [Transaction] = []
+        
+        // Get required column indices
+        guard let amountIndex = columnMappings["amount"],
+              let categoryIndex = columnMappings["category"],
+              let dateIndex = columnMappings["date"] else {
+            return .failure(CSVParseError.missingRequiredColumns("One or more required columns are not mapped"))
+        }
+        
+        // Get optional column indices
+        let notesIndex = columnMappings["notes"]
+        let typeIndex = columnMappings["type"]
+        let recurrenceIndex = columnMappings["recurrence"]
+        let iconIndex = columnMappings["icon"]
+        
+        // Enhanced date formatters with more format options
+        let dateFormatters = [
+            // ISO formats
+            createDateFormatter(format: "yyyy-MM-dd"),
+            createDateFormatter(format: "yyyy-MM-dd'T'HH:mm:ss"),
+            createDateFormatter(format: "yyyy-MM-dd'T'HH:mm:ssZ"),
+            createDateFormatter(format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"),
             
-            // Skip header row
-            guard rows.count > 1 else {
-                return .failure(CSVParseError.emptyFile)
+            // US formats
+            createDateFormatter(format: "MM/dd/yyyy"),
+            createDateFormatter(format: "MM/dd/yy"),
+            createDateFormatter(format: "M/d/yyyy"),
+            createDateFormatter(format: "M/d/yy"),
+            
+            // European formats
+            createDateFormatter(format: "dd/MM/yyyy"),
+            createDateFormatter(format: "dd/MM/yy"),
+            createDateFormatter(format: "d/M/yyyy"),
+            createDateFormatter(format: "d/M/yy"),
+            
+            // Asian formats
+            createDateFormatter(format: "yyyy/MM/dd"),
+            createDateFormatter(format: "yy/MM/dd"),
+            
+            // Date with time formats
+            createDateFormatter(format: "MM-dd-yyyy"),
+            createDateFormatter(format: "dd-MM-yyyy"),
+            createDateFormatter(format: "yyyy-MM-dd HH:mm:ss"),
+            createDateFormatter(format: "MM/dd/yyyy HH:mm:ss"),
+            createDateFormatter(format: "dd/MM/yyyy HH:mm:ss"),
+            
+            // Special formats with month names
+            createDateFormatter(format: "MMM d, yyyy"),
+            createDateFormatter(format: "MMMM d, yyyy"),
+            createDateFormatter(format: "d MMM yyyy"),
+            createDateFormatter(format: "d MMMM yyyy")
+        ]
+        
+        var successCount = 0
+        var failureCount = 0
+        var unparsedDates: [String] = []  // Track date strings that couldn't be parsed
+        
+        // Process data rows
+        for i in 1..<rows.count {
+            let row = rows[i].trimmingCharacters(in: .whitespacesAndNewlines)
+            if row.isEmpty { continue }
+            
+            let columns = parseCSVRow(row)
+            
+            // Skip if row doesn't have enough columns for required fields
+            let maxRequiredIndex = max(amountIndex, categoryIndex, dateIndex)
+            if columns.count <= maxRequiredIndex {
+                failureCount += 1
+                continue
             }
             
-            var transactions: [Transaction] = []
+            // Parse amount
+            let amountString = columns[amountIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            // Handle currency symbols, commas, and parentheses for negative values
+            var cleanedAmountString = amountString.replacingOccurrences(of: "[^0-9.,-]", with: "", options: .regularExpression)
             
-            // Get required column indices
-            guard let amountIndex = columnMappings["amount"],
-                  let categoryIndex = columnMappings["category"],
-                  let dateIndex = columnMappings["date"] else {
-                return .failure(CSVParseError.missingRequiredColumns("One or more required columns are not mapped"))
+            // Handle negative amounts in parentheses e.g. ($50.00)
+            if amountString.contains("(") && amountString.contains(")") {
+                cleanedAmountString = "-" + cleanedAmountString
             }
             
-            // Get optional column indices
-            let notesIndex = columnMappings["notes"]
-            let typeIndex = columnMappings["type"]
-            let recurrenceIndex = columnMappings["recurrence"]
-            let iconIndex = columnMappings["icon"]
+            // Replace commas in numbers (e.g., 1,000.00 -> 1000.00)
+            cleanedAmountString = cleanedAmountString.replacingOccurrences(of: ",", with: "")
             
-            // Date formatters for parsing different date formats
-            let dateFormatters = [
-                createDateFormatter(format: "yyyy-MM-dd"),
-                createDateFormatter(format: "MM/dd/yyyy"),
-                createDateFormatter(format: "dd/MM/yyyy"),
-                createDateFormatter(format: "yyyy/MM/dd"),
-                createDateFormatter(format: "MM-dd-yyyy"),
-                createDateFormatter(format: "yyyy-MM-dd HH:mm:ss"),
-                createDateFormatter(format: "yyyy-MM-dd HH:mm:ss Z"),
-                createDateFormatter(format: "yyyy/MM/dd HH:mm:ss Z")
-            ]
+            guard let amount = Double(cleanedAmountString) else {
+                failureCount += 1
+                continue
+            }
             
-            var successCount = 0
-            var failureCount = 0
+            // Parse category
+            let category = columns[categoryIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            if category.isEmpty {
+                failureCount += 1
+                continue
+            }
             
-            // Process data rows
-            for i in 1..<rows.count {
-                let row = rows[i].trimmingCharacters(in: .whitespacesAndNewlines)
-                if row.isEmpty { continue }
-                
-                let columns = parseCSVRow(row)
-                
-                // Skip if row doesn't have enough columns for required fields
-                let maxRequiredIndex = max(amountIndex, categoryIndex, dateIndex)
-                if columns.count <= maxRequiredIndex {
-                    failureCount += 1
-                    continue
+            // Parse transaction type
+            var type: Transaction.TransactionType = .expense // Default
+            if let typeIndex = typeIndex, typeIndex < columns.count {
+                let typeString = columns[typeIndex].lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                if typeString.contains("income") || typeString.contains("deposit") || typeString.contains("credit") {
+                    type = .income
+                } else if typeString.contains("invest") {
+                    type = .investment
+                } else if typeString.contains("save") {
+                    type = .savings
                 }
-                
-                // Parse amount
-                let amountString = columns[amountIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-                // Handle currency symbols, commas, and parentheses for negative values
-                var cleanedAmountString = amountString.replacingOccurrences(of: "[^0-9.,-]", with: "", options: .regularExpression)
-                
-                // Handle negative amounts in parentheses e.g. ($50.00)
-                if amountString.contains("(") && amountString.contains(")") {
-                    cleanedAmountString = "-" + cleanedAmountString
+            } else {
+                // If no type column is mapped, use amount sign as a hint
+                if amount > 0 {
+                    type = .income
                 }
+            }
+            
+            // Parse date - IMPROVED VERSION
+            var date = Date()
+            var dateParseSuccess = false
+            
+            if dateIndex < columns.count {
+                let originalDateString = columns[dateIndex]
+                let dateString = originalDateString.trimmingCharacters(in: .whitespacesAndNewlines)
                 
-                // Replace commas in numbers (e.g., 1,000.00 -> 1000.00)
-                cleanedAmountString = cleanedAmountString.replacingOccurrences(of: ",", with: "")
-                
-                guard let amount = Double(cleanedAmountString) else {
-                    failureCount += 1
-                    continue
-                }
-                
-                // Parse category
-                let category = columns[categoryIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-                if category.isEmpty {
-                    failureCount += 1
-                    continue
-                }
-                
-                // Parse transaction type
-                var type: Transaction.TransactionType = .expense // Default
-                if let typeIndex = typeIndex, typeIndex < columns.count {
-                    let typeString = columns[typeIndex].lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                    if typeString.contains("income") || typeString.contains("deposit") || typeString.contains("credit") {
-                        type = .income
-                    } else if typeString.contains("invest") {
-                        type = .investment
-                    } else if typeString.contains("save") {
-                        type = .savings
-                    }
-                } else {
-                    // If no type column is mapped, use amount sign as a hint
-                    if amount > 0 {
-                        type = .income
-                    }
-                }
-                
-                // Parse date
-                var date = Date()
-                var dateParseSuccess = false
-                if dateIndex < columns.count {
-                    let dateString = columns[dateIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-                    
+                if !dateString.isEmpty {
+                    // Try to clean up the date string - remove extra quotes and normalize separators
+                    var normalizedDateString = dateString.replacingOccurrences(of: "\"", with: "")
+                    // Try parsing with each formatter
                     for formatter in dateFormatters {
-                        if let parsedDate = formatter.date(from: dateString) {
+                        if let parsedDate = formatter.date(from: normalizedDateString) {
                             date = parsedDate
                             dateParseSuccess = true
                             break
                         }
                     }
                     
+                    // If still not parsed, try more aggressive normalization
                     if !dateParseSuccess {
-                        // Try to handle more complex date formats here
-                        // For now, we'll use today's date and continue
-                        print("⚠️ Could not parse date: \(dateString) - using today's date")
+                        // Replace all non-alphanumeric characters with a space except - and /
+                        normalizedDateString = dateString.replacingOccurrences(of: "[^a-zA-Z0-9\\-/]", with: " ", options: .regularExpression)
+                        normalizedDateString = normalizedDateString.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                        normalizedDateString = normalizedDateString.trimmingCharacters(in: .whitespacesAndNewlines)
+                        
+                        for formatter in dateFormatters {
+                            if let parsedDate = formatter.date(from: normalizedDateString) {
+                                date = parsedDate
+                                dateParseSuccess = true
+                                break
+                            }
+                        }
+                    }
+                    
+                    if !dateParseSuccess {
+                        // Track unparsed dates for reporting to the user
+                        if !unparsedDates.contains(dateString) {
+                            unparsedDates.append(dateString)
+                        }
+                        
+                        // Try to extract year, month, day as fallback
+                        if let (year, month, day) = extractDateComponents(from: dateString) {
+                            var dateComponents = DateComponents()
+                            dateComponents.year = year
+                            dateComponents.month = month
+                            dateComponents.day = day
+                            
+                            if let fallbackDate = Calendar.current.date(from: dateComponents) {
+                                date = fallbackDate
+                                dateParseSuccess = true
+                            }
+                        }
                     }
                 }
-                
-                // Parse recurrence
-                var recurrence: Transaction.RecurrenceType = .oneTime
-                if let recurrenceIndex = recurrenceIndex, recurrenceIndex < columns.count {
-                    let recurrenceString = columns[recurrenceIndex].lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                    if recurrenceString.contains("daily") {
-                        recurrence = .daily
-                    } else if recurrenceString.contains("week") && recurrenceString.contains("bi") {
-                        recurrence = .biWeekly
-                    } else if recurrenceString.contains("week") {
-                        recurrence = .weekly
-                    } else if recurrenceString.contains("month") {
-                        recurrence = .monthly
-                    } else if recurrenceString.contains("quarter") {
-                        recurrence = .quarterly
-                    } else if recurrenceString.contains("year") || recurrenceString.contains("annual") {
-                        recurrence = .annually
-                    }
-                }
-                
-                // Parse notes
-                var notes: String? = nil
-                if let notesIndex = notesIndex, notesIndex < columns.count {
-                    let noteText = columns[notesIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !noteText.isEmpty {
-                        notes = noteText
-                    }
-                }
-                
-                // Parse icon or use default
-                var icon = "💵" // Default icon
-                if let iconIndex = iconIndex, iconIndex < columns.count {
-                    let iconText = columns[iconIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !iconText.isEmpty {
-                        icon = iconText
-                    }
-                } else {
-                    // Generate icon based on category if none provided
-                    icon = defaultIconForCategory(category)
-                }
-                
-                // Create transaction
-                let transaction = Transaction(
-                    amount: amount,
-                    category: category,
-                    type: type,
-                    recurrence: recurrence,
-                    notes: notes,
-                    icon: icon,
-                    date: date
-                )
-                
-                transactions.append(transaction)
-                successCount += 1
             }
             
-            print("✅ Successfully imported \(successCount) transactions")
-            if failureCount > 0 {
-                print("⚠️ Failed to import \(failureCount) rows due to formatting issues")
+            // Parse recurrence
+            var recurrence: Transaction.RecurrenceType = .oneTime
+            if let recurrenceIndex = recurrenceIndex, recurrenceIndex < columns.count {
+                let recurrenceString = columns[recurrenceIndex].lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                if recurrenceString.contains("daily") {
+                    recurrence = .daily
+                } else if recurrenceString.contains("week") && recurrenceString.contains("bi") {
+                    recurrence = .biWeekly
+                } else if recurrenceString.contains("week") {
+                    recurrence = .weekly
+                } else if recurrenceString.contains("month") {
+                    recurrence = .monthly
+                } else if recurrenceString.contains("quarter") {
+                    recurrence = .quarterly
+                } else if recurrenceString.contains("year") || recurrenceString.contains("annual") {
+                    recurrence = .annually
+                }
             }
             
-            return .success(transactions)
+            // Parse notes
+            var notes: String? = nil
+            if let notesIndex = notesIndex, notesIndex < columns.count {
+                let noteText = columns[notesIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !noteText.isEmpty {
+                    notes = noteText
+                }
+            }
+            
+            // Parse icon or use default
+            var icon = "💵" // Default icon
+            if let iconIndex = iconIndex, iconIndex < columns.count {
+                let iconText = columns[iconIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !iconText.isEmpty {
+                    icon = iconText
+                }
+            } else {
+                // Generate icon based on category if none provided
+                icon = defaultIconForCategory(category)
+            }
+            
+            // Create transaction
+            let transaction = Transaction(
+                amount: amount,
+                category: category,
+                type: type,
+                recurrence: recurrence,
+                notes: notes,
+                icon: icon,
+                date: date
+            )
+            
+            transactions.append(transaction)
+            successCount += 1
         }
         
-        // Helper function to create date formatters
-        private func createDateFormatter(format: String) -> DateFormatter {
-            let formatter = DateFormatter()
-            formatter.dateFormat = format
-            return formatter
+        print("✅ Successfully imported \(successCount) transactions")
+        if failureCount > 0 {
+            print("⚠️ Failed to import \(failureCount) rows due to formatting issues")
         }
+        
+        // If we had date parsing issues, return an error or warning
+        if !unparsedDates.isEmpty && unparsedDates.count <= 5 {
+            errorMessage = "Warning: Could not parse dates in the following format(s): \(unparsedDates.joined(separator: ", ")). Using the dates as found in the file."
+            showError = true
+        } else if !unparsedDates.isEmpty {
+            errorMessage = "Warning: Some dates could not be parsed correctly. Please check your date formats."
+            showError = true
+        }
+        
+        return .success(transactions)
+    }
+
+    // Helper function to create date formatters
+    private func createDateFormatter(format: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateFormat = format
+        formatter.locale = Locale(identifier: "en_US_POSIX") // Use consistent locale for parsing
+        formatter.timeZone = TimeZone.current // Use current time zone
+        formatter.isLenient = true // Be lenient when parsing
+        return formatter
+    }
+
+    // Helper function to extract date components from a string when formatters fail
+    private func extractDateComponents(from dateString: String) -> (year: Int, month: Int, day: Int)? {
+        // Try to extract numbers from the string
+        let numbers = dateString.components(separatedBy: CharacterSet.decimalDigits.inverted)
+            .filter { !$0.isEmpty }
+            .compactMap { Int($0) }
+        
+        guard numbers.count >= 3 else { return nil }
+        
+        // Try to guess which numbers represent year/month/day
+        var year = 0
+        var month = 0
+        var day = 0
+        
+        // Check for 4-digit year
+        for num in numbers {
+            if num >= 1900 && num <= 2100 {
+                year = num
+                break
+            }
+        }
+        
+        // If no 4-digit year found, try other heuristics
+        if year == 0 {
+            // Sort numbers in descending order
+            let sortedNumbers = numbers.sorted(by: >)
+            
+            if numbers.count == 3 {
+                // Common case: three numbers representing day, month, year
+                if sortedNumbers[0] > 31 { // Largest is likely year
+                    year = sortedNumbers[0]
+                    if sortedNumbers[1] > 12 { // Second largest is day
+                        day = sortedNumbers[1]
+                        month = sortedNumbers[2]
+                    } else { // Second largest is month
+                        month = sortedNumbers[1]
+                        day = sortedNumbers[2]
+                    }
+                } else { // No number > 31, try to disambiguate
+                    if sortedNumbers[0] > 12 { // Largest is day
+                        day = sortedNumbers[0]
+                        month = sortedNumbers[1]
+                        year = 2000 + sortedNumbers[2] // Assume 2-digit year
+                    } else { // Largest could be month or day
+                        day = sortedNumbers[1]
+                        month = sortedNumbers[0]
+                        year = 2000 + sortedNumbers[2] // Assume 2-digit year
+                    }
+                }
+            } else {
+                // More complex case, take largest number as year if > 31
+                for num in sortedNumbers {
+                    if num > 31 {
+                        year = num
+                        break
+                    }
+                }
+                
+                // If still no year, use current year
+                if year == 0 {
+                    year = Calendar.current.component(.year, from: Date())
+                }
+                
+                // Find a number between 1-12 for month
+                for num in numbers {
+                    if num >= 1 && num <= 12 && num != year {
+                        month = num
+                        break
+                    }
+                }
+                
+                // Find a number between 1-31 for day
+                for num in numbers {
+                    if num >= 1 && num <= 31 && num != year && num != month {
+                        day = num
+                        break
+                    }
+                }
+            }
+        } else {
+            // If we found a 4-digit year, find month and day
+            let nonYearNumbers = numbers.filter { $0 != year }
+            
+            // Find a number between 1-12 for month
+            for num in nonYearNumbers {
+                if num >= 1 && num <= 12 {
+                    month = num
+                    break
+                }
+            }
+            
+            // Find a number between 1-31 for day
+            for num in nonYearNumbers {
+                if num >= 1 && num <= 31 && num != month {
+                    day = num
+                    break
+                }
+            }
+        }
+        
+        // Validate and correct found values
+        if year < 100 {
+            year += 2000 // Assume 21st century for 2-digit years
+        }
+        
+        if month < 1 || month > 12 {
+            month = 1 // Default to January if invalid month
+        }
+        
+        if day < 1 || day > 31 {
+            day = 1 // Default to 1st of month if invalid day
+        }
+        
+        return (year, month, day)
+    }
+        
         
         // Helper function to get default icon based on category
         private func defaultIconForCategory(_ category: String) -> String {

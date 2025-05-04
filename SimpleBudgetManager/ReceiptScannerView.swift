@@ -9,36 +9,35 @@ import AVFoundation
 import Vision
 import VisionKit
 
-// Add a coordinator to handle data flow between views
 class TransactionCoordinator: ObservableObject {
     @Published var scannedAmount: Double?
+    @Published var scannedDate: Date?
     @Published var shouldOpenTransactionEntry = false
     
-    func setScannedAmount(_ amount: Double) {
+    func setScannedDataAndProceed(amount: Double, date: Date? = nil) {
         self.scannedAmount = amount
+        self.scannedDate = date
         self.shouldOpenTransactionEntry = true
     }
     
-    func resetScannedAmount() {
+    func resetScannedData() {
         self.scannedAmount = nil
+        self.scannedDate = nil
         self.shouldOpenTransactionEntry = false
     }
 }
 
-import SwiftUI
-import Vision
-import UIKit
-
-// First, add the ReceiptOCRManager class
+// Update the ReceiptOCRManager class to extract dates
 class ReceiptOCRManager {
     // MARK: - Properties
     private var isProcessing: Bool = false
     private var recognizedTotal: String = ""
+    private var recognizedDate: Date?
     private var showingResults: Bool = false
-    private var onCompletion: ((String, Bool) -> Void)?
+    private var onCompletion: ((String, Date?, Bool) -> Void)?
 
     // MARK: - Public methods
-    func scanReceipt(from image: UIImage, completion: @escaping (String, Bool) -> Void) {
+    func scanReceipt(from image: UIImage, completion: @escaping (String, Date?, Bool) -> Void) {
         isProcessing = true
         onCompletion = completion
         recognizeTextFromImage(image)
@@ -47,14 +46,14 @@ class ReceiptOCRManager {
     // MARK: - Private methods
     private func recognizeTextFromImage(_ image: UIImage) {
         guard let cgImage = image.cgImage else {
-            completeProcess(with: "Invalid image", success: false)
+            completeProcess(with: "Invalid image", date: nil, success: false)
             return
         }
         
         // Create a new Vision text recognition request
         let request = VNRecognizeTextRequest { [weak self] request, error in
             guard let self = self, error == nil, let observations = request.results as? [VNRecognizedTextObservation] else {
-                self?.completeProcess(with: "Text recognition failed", success: false)
+                self?.completeProcess(with: "Text recognition failed", date: nil, success: false)
                 return
             }
             
@@ -75,8 +74,9 @@ class ReceiptOCRManager {
             // Process all recognized text with position information
             let recognizedText = sortedBlocks.map { $0.text }.joined(separator: "\n")
             
-            // Extract total using multiple strategies
+            // Extract total and date using multiple strategies
             self.extractTotal(from: recognizedText, sortedBlocks: sortedBlocks)
+            self.extractDate(from: recognizedText, sortedBlocks: sortedBlocks)
         }
         
         // Configure the text recognition request for better accuracy
@@ -92,9 +92,174 @@ class ReceiptOCRManager {
                 try requestHandler.perform([request])
             } catch {
                 print("Error performing OCR: \(error)")
-                self.completeProcess(with: "OCR processing failed", success: false)
+                self.completeProcess(with: "OCR processing failed", date: nil, success: false)
             }
         }
+    }
+    
+    private func extractDate(from text: String, sortedBlocks: [(text: String, boundingBox: CGRect)]) {
+        // Find potential date strings in the text
+        var extractedDate: Date? = nil
+        
+        // Strategy 1: Look for common date patterns in the entire text
+        if let date = findDateByPatterns(in: text) {
+            extractedDate = date
+        }
+        
+        // Strategy 2: Look for date headers in the top portion of the receipt
+        if extractedDate == nil {
+            // Focus on the top third of the receipt where date is typically found
+            let topBlocks = Array(sortedBlocks.suffix(sortedBlocks.count * 2/3))
+            if let date = findDateInTopBlocks(topBlocks) {
+                extractedDate = date
+            }
+        }
+        
+        // Strategy 3: Look near transaction keywords
+        if extractedDate == nil {
+            if let date = findDateNearKeywords(in: sortedBlocks) {
+                extractedDate = date
+            }
+        }
+        
+        // Use fallback to today's date if no date was found
+        self.recognizedDate = extractedDate
+    }
+    
+    private func findDateByPatterns(in text: String) -> Date? {
+        // Common date patterns to look for
+        let datePatterns = [
+            // MM/DD/YYYY or MM/DD/YY
+            "\\b(0?[1-9]|1[0-2])[\\/\\-\\.](0?[1-9]|[12][0-9]|3[01])[\\/\\-\\.](19|20)?\\d{2}\\b",
+            // DD/MM/YYYY or DD/MM/YY
+            "\\b(0?[1-9]|[12][0-9]|3[01])[\\/\\-\\.](0?[1-9]|1[0-2])[\\/\\-\\.](19|20)?\\d{2}\\b",
+            // YYYY/MM/DD
+            "\\b(19|20)\\d{2}[\\/\\-\\.](0?[1-9]|1[0-2])[\\/\\-\\.](0?[1-9]|[12][0-9]|3[01])\\b",
+            // Month DD, YYYY
+            "\\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* (0?[1-9]|[12][0-9]|3[01])(st|nd|rd|th)?,? ?(19|20)?\\d{2}\\b",
+            // DD Month YYYY
+            "\\b(0?[1-9]|[12][0-9]|3[01])(st|nd|rd|th)? (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* ?,? ?(19|20)?\\d{2}\\b"
+        ]
+        
+        let dateFormatter = DateFormatter()
+        dateFormatter.locale = Locale(identifier: "en_US")
+        dateFormatter.timeZone = TimeZone.current
+        
+        // Try different date formats
+        let dateFormats = [
+            "MM/dd/yyyy", "MM/dd/yy", "M/d/yyyy", "M/d/yy",
+            "dd/MM/yyyy", "dd/MM/yy", "d/M/yyyy", "d/M/yy",
+            "yyyy/MM/dd", "yyyy-MM-dd", "yyyy.MM.dd",
+            "MMMM d, yyyy", "MMM d, yyyy", "MMMM d yyyy", "MMM d yyyy",
+            "d MMMM yyyy", "d MMM yyyy"
+        ]
+        
+        // First try to find dates using regular expressions
+        for pattern in datePatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                let nsString = text as NSString
+                let range = NSRange(location: 0, length: nsString.length)
+                let matches = regex.matches(in: text, options: [], range: range)
+                
+                for match in matches {
+                    let dateString = nsString.substring(with: match.range)
+                    
+                    // Try each date format
+                    for format in dateFormats {
+                        dateFormatter.dateFormat = format
+                        if let date = dateFormatter.date(from: dateString) {
+                            // Validate the date is reasonable (not too far in the past or future)
+                            let calendar = Calendar.current
+                            let oneYearAgo = calendar.date(byAdding: .year, value: -1, to: Date())!
+                            let oneMonthLater = calendar.date(byAdding: .month, value: 1, to: Date())!
+                            
+                            if date >= oneYearAgo && date <= oneMonthLater {
+                                return date
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // If regex patterns didn't work, try a more brute-force approach with NSDataDetector
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
+            let matches = detector.matches(in: text, options: [], range: NSRange(location: 0, length: text.utf16.count))
+            
+            if let match = matches.first, let date = match.date {
+                // Similar validation
+                let calendar = Calendar.current
+                let oneYearAgo = calendar.date(byAdding: .year, value: -1, to: Date())!
+                let oneMonthLater = calendar.date(byAdding: .month, value: 1, to: Date())!
+                
+                if date >= oneYearAgo && date <= oneMonthLater {
+                    return date
+                }
+            }
+        }
+        
+        return nil
+    }
+    
+    private func findDateInTopBlocks(_ blocks: [(text: String, boundingBox: CGRect)]) -> Date? {
+        for block in blocks {
+            let text = block.text
+            
+            // Look for lines that likely contain date information
+            let dateKeywords = ["date:", "date", "issued", "invoice date", "receipt date", "transaction date"]
+            var isDateLine = false
+            
+            for keyword in dateKeywords {
+                if text.lowercased().contains(keyword) {
+                    isDateLine = true
+                    break
+                }
+            }
+            
+            if isDateLine || text.lowercased().contains("20") || text.contains("/") {
+                // This line might contain a date, try to extract it
+                if let date = findDateByPatterns(in: text) {
+                    return date
+                }
+            }
+        }
+        
+        return nil
+    }
+    
+    private func findDateNearKeywords(in blocks: [(text: String, boundingBox: CGRect)]) -> Date? {
+        // Look for date near transaction-related keywords
+        let transactionKeywords = ["transaction", "purchase", "payment", "order", "invoice"]
+        
+        for (index, block) in blocks.enumerated() {
+            let text = block.text.lowercased()
+            
+            // Check if this block contains transaction keywords
+            var isTransactionLine = false
+            for keyword in transactionKeywords {
+                if text.contains(keyword) {
+                    isTransactionLine = true
+                    break
+                }
+            }
+            
+            if isTransactionLine {
+                // Check this line and surrounding lines for dates
+                let surroundingBlocks = [
+                    index > 0 ? blocks[index - 1].text : "",
+                    block.text,
+                    index < blocks.count - 1 ? blocks[index + 1].text : ""
+                ]
+                
+                for blockText in surroundingBlocks {
+                    if let date = findDateByPatterns(in: blockText) {
+                        return date
+                    }
+                }
+            }
+        }
+        
+        return nil
     }
     
     private func extractTotal(from text: String, sortedBlocks: [(text: String, boundingBox: CGRect)]) {
@@ -121,9 +286,9 @@ class ReceiptOCRManager {
         if let bestMatch = sortedTotals.first {
             // Format the total amount properly
             let formattedTotal = formatCurrency(bestMatch.amount)
-            completeProcess(with: formattedTotal, success: true)
+            completeProcess(with: formattedTotal, date: self.recognizedDate, success: true)
         } else {
-            completeProcess(with: "No total found", success: false)
+            completeProcess(with: "No total found", date: self.recognizedDate, success: false)
         }
     }
     
@@ -399,12 +564,12 @@ class ReceiptOCRManager {
         return amount
     }
     
-    private func completeProcess(with result: String, success: Bool) {
+    private func completeProcess(with result: String, date: Date?, success: Bool) {
         DispatchQueue.main.async {
             self.recognizedTotal = result
             self.isProcessing = false
             self.showingResults = true
-            self.onCompletion?(result, success)
+            self.onCompletion?(result, date, success)
         }
     }
 }
@@ -420,6 +585,7 @@ struct ReceiptScannerView: View {
     @State private var showingResults = false
     @ObservedObject var viewModel: BudgetViewModel
     @Binding var isPresented: Bool
+    @State private var recognizedDate: Date? = nil
     
     // Create OCR manager
     private let ocrManager = ReceiptOCRManager()
@@ -576,38 +742,47 @@ struct ReceiptScannerView: View {
         }
     }
     
-    // New method using the OCR Manager
+    // Updated method using the OCR Manager
     private func processReceiptImage(_ image: UIImage) {
-        ocrManager.scanReceipt(from: image) { (extractedTotal, success) in
+        ocrManager.scanReceipt(from: image) { (extractedTotal, extractedDate, success) in
             self.recognizedTotal = extractedTotal
+            self.recognizedDate = extractedDate
             self.isProcessing = false
             self.showingResults = true
         }
     }
-    
-    
 }
+
 struct ResultsView: View {
     @Binding var recognizedTotal: String?
     @ObservedObject var coordinator: TransactionCoordinator
     var onDismiss: () -> Void
     @State private var amount: Double?
+    @State private var detectedDate: Date?
     @FocusState private var isAmountFocused: Bool
+    
+    // Date formatter for display
+    private let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
     
     var body: some View {
         ZStack {
             Color(UIColor.systemBackground)
                 .ignoresSafeArea()
             
-            VStack(spacing: 30) {
+            VStack(spacing: 25) {
                 // Header
                 VStack(spacing: 8) {
-                    Text("Receipt Total")
+                    Text("Receipt Details")
                         .font(.title)
                         .fontWeight(.bold)
                         .foregroundColor(.primary)
                     
-                    Text("Review and confirm the amount")
+                    Text("Review and confirm the information")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
@@ -625,7 +800,27 @@ struct ResultsView: View {
                             .foregroundColor(bluePurpleColor)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
+                    .padding(.vertical, 20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(bluePurpleColor.opacity(0.1))
+                    )
+                    .padding(.horizontal, 24)
+                }
+                
+                // Receipt Date Card (if detected)
+                if let date = detectedDate {
+                    VStack(alignment: .center, spacing: 10) {
+                        Text("Detected Date")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        Text(dateFormatter.string(from: date))
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .foregroundColor(bluePurpleColor)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
                     .background(
                         RoundedRectangle(cornerRadius: 16)
                             .fill(bluePurpleColor.opacity(0.1))
@@ -635,7 +830,7 @@ struct ResultsView: View {
                 
                 // Amount Input
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Adjust if needed")
+                    Text("Adjust amount if needed")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .padding(.leading, 8)
@@ -673,7 +868,6 @@ struct ResultsView: View {
                     )
                 }
                 .padding(.horizontal, 24)
-                .padding(.top, 10)
                 
                 Spacer()
                 
@@ -681,14 +875,14 @@ struct ResultsView: View {
                 VStack(spacing: 16) {
                     Button(action: {
                         if let amount = self.amount {
-                            coordinator.setScannedAmount(amount)
+                            coordinator.setScannedDataAndProceed(amount: amount, date: detectedDate)
                         } else if let recognizedTotal = self.recognizedTotal,
                                   let numericTotal = Double(recognizedTotal.replacingOccurrences(of: ",", with: ".")) {
-                            coordinator.setScannedAmount(numericTotal)
+                            coordinator.setScannedDataAndProceed(amount: numericTotal, date: detectedDate)
                         }
                         onDismiss()
                     }) {
-                        Text("Use This Amount")
+                        Text("Use This Information")
                             .font(.headline)
                             .fontWeight(.semibold)
                             .frame(maxWidth: .infinity)
@@ -697,7 +891,7 @@ struct ResultsView: View {
                             .background(bluePurpleColor)
                             .cornerRadius(16)
                     }
-                    .contentShape(Rectangle())  // Ensure the entire button area is tappable
+                    .contentShape(Rectangle())
                     
                     Button(action: {
                         onDismiss()
@@ -714,7 +908,7 @@ struct ResultsView: View {
                                     .stroke(bluePurpleColor, lineWidth: 1.5)
                             )
                     }
-                    .contentShape(Rectangle())  // Ensure the entire button area is tappable
+                    .contentShape(Rectangle())
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 40)
@@ -731,6 +925,11 @@ struct ResultsView: View {
         }
     }
 }
+
+    
+
+
+
 
 // Modified Transaction Entry View that accepts a prefilled amount
 struct ModifiedAddTransactionView: View {
