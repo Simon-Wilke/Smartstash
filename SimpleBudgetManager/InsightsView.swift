@@ -384,18 +384,24 @@ struct InsightsView: View {
         return previousWeekNet != 0 ? currentWeekNet - previousWeekNet : currentWeekNet
     }
     
+    // MARK: - Fixed summaryButtons implementation
     var summaryButtons: [SummaryButton] {
-        // Get month name for the subtitle
+        // Get previous month name for the subtitle
+        let calendar = Calendar.current
+        let today = Date()
+        let startOfCurrentMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
+        let previousMonth = calendar.date(byAdding: .month, value: -1, to: startOfCurrentMonth)!
+        
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "MMMM yyyy"
-        let monthName = dateFormatter.string(from: Date())
+        let previousMonthName = dateFormatter.string(from: previousMonth)
         
         return [
             SummaryButton(
                 id: 1,
                 type: .weekly,
                 title: "Weekly Summary",
-                subtitle: "Last 7 Days",
+                subtitle: "Previous Week",
                 systemImage: "chart.line.uptrend.xyaxis",
                 gradient: LinearGradient(
                     colors: [AppTheme.primary, AppTheme.primary.opacity(0.8)],
@@ -407,7 +413,7 @@ struct InsightsView: View {
                 id: 2,
                 type: .monthly,
                 title: "Monthly Report",
-                subtitle: monthName,
+                subtitle: previousMonthName,
                 systemImage: "calendar.badge.clock",
                 gradient: LinearGradient(
                     colors: [AppTheme.secondary, AppTheme.secondary.opacity(0.8)],
@@ -417,7 +423,6 @@ struct InsightsView: View {
             )
         ]
     }
-
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -572,20 +577,47 @@ struct InsightsView: View {
         ]
     }
 }
-
-
+// Now modify the InsightsButtonsSection to add a refresh button
 struct InsightsButtonsSection: View {
     let buttons: [SummaryButton]
     let onTapWeekly: () -> Void
     let onTapMonthly: () -> Void
     @Environment(\.colorScheme) private var colorScheme
-    @ObservedObject var storyManager: StoryManager // Add storyManager as an observed object
+    @ObservedObject var storyManager: StoryManager
+    @State private var isRefreshing = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Insights & Reports")
-                .font(.headline)
-                .foregroundColor(colorScheme == .dark ? .white : .black)
+            HStack {
+                Text("Insights & Reports")
+                    .font(.headline)
+                    .foregroundColor(colorScheme == .dark ? .white : .black)
+                
+                Spacer()
+                
+                // Add refresh button
+                Button(action: {
+                    withAnimation {
+                        isRefreshing = true
+                    }
+                    
+                    // Regenerate stories
+                    storyManager.forceRegenerateStories()
+                    
+                    // Reset the refreshing state after a short delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                        withAnimation {
+                            isRefreshing = false
+                        }
+                    }
+                }) {
+                    Image(systemName: isRefreshing ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.triangle.2.circlepath.circle")
+                        .font(.title3)
+                        .foregroundColor(AppTheme.primary)
+                        .rotationEffect(isRefreshing ? .degrees(360) : .degrees(0))
+                        .animation(isRefreshing ? Animation.linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
+                }
+            }
             
             VStack(spacing: 12) {
                 ForEach(buttons) { button in
@@ -613,6 +645,24 @@ struct InsightsButtonsSection: View {
             return storyManager.hasMonthlyStory()
         }
         return false
+    }
+}
+extension StoryManager {
+    // Force regenerate stories regardless of timing conditions
+    func forceRegenerateStories() {
+        // Force regenerate both weekly and monthly stories
+        generateWeeklyStory()
+        generateMonthlyStory()
+        
+        // Update the last update dates to now to prevent automatic regeneration
+        let currentDate = Date()
+        lastWeeklyUpdateDate = currentDate
+        lastMonthlyUpdateDate = currentDate
+        UserDefaults.standard.set(currentDate, forKey: "lastWeeklyUpdate")
+        UserDefaults.standard.set(currentDate, forKey: "lastMonthlyUpdate")
+        
+        // Save the regenerated stories
+        saveStories()
     }
 }
 import SwiftUI
@@ -785,88 +835,71 @@ struct TimeSegmentControl: View {
     @State private var engine: CHHapticEngine?
     @Environment(\.colorScheme) private var colorScheme
     
-    private let buttonHeight: CGFloat = 38
+    private let height: CGFloat = 36
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Time Frame")
+        VStack(alignment: .leading, spacing: 12) {
+            Text("")
                 .font(.headline)
-                .padding(.top, 20)
                 .foregroundColor(colorScheme == .dark ? .white : .black)
             
             HStack(spacing: 0) {
                 ForEach(InsightsView.Timeframe.allCases, id: \.self) { timeframe in
-                    timeframeButton(for: timeframe)
+                    Button(action: {
+                        withAnimation(.spring()) {
+                            selectedTimeframe = timeframe
+                            playHaptic()
+                        }
+                    }) {
+                        Text(timeframe.rawValue)
+                            .font(.subheadline.weight(.medium))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(selectedTimeframe == timeframe ? Color.accentColor : Color.clear)
+                            .foregroundColor(selectedTimeframe == timeframe ? .white :
+                                            (colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.8)))
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
             }
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(colorScheme == .dark ? Color.black.opacity(0.3) : Color(UIColor.systemBackground).opacity(0.8))
-                    .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .frame(height: buttonHeight)
+            .background(backgroundStyle)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .frame(height: height)
         }
         .frame(width: 300)
-        .onAppear {
-            prepareHaptics()
-        }
+        .onAppear(perform: setupHaptics)
     }
     
-    private func timeframeButton(for timeframe: InsightsView.Timeframe) -> some View {
-        Button(action: {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.5, blendDuration: 0.1)) {
-                selectedTimeframe = timeframe
-                triggerHaptic()
-            }
-        }) {
-            Text(timeframe.rawValue)
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .frame(maxWidth: .infinity)
-                .frame(height: buttonHeight)
-                .background(
-                    selectedTimeframe == timeframe ?
-                        Color.accentColor :
-                        Color.clear
-                )
-                .foregroundColor(
-                    selectedTimeframe == timeframe ?
-                        .white :
-                        (colorScheme == .dark ? .white.opacity(0.8) : .black.opacity(0.8))
-                )
-        }
-        .buttonStyle(PlainButtonStyle())
+    private var backgroundStyle: some View {
+        RoundedRectangle(cornerRadius: 10)
+            .fill(colorScheme == .dark ? Color.black.opacity(0.3) : Color(UIColor.systemBackground).opacity(0.8))
+            .shadow(color: Color.black.opacity(0.1), radius: 1, x: 0, y: 1)
     }
-
-    private func prepareHaptics() {
+    
+    private func setupHaptics() {
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
         do {
             engine = try CHHapticEngine()
             try engine?.start()
         } catch {
-            print("Haptics engine failed to start: \(error.localizedDescription)")
+            print("Haptics failed: \(error.localizedDescription)")
         }
     }
-
-    private func triggerHaptic() {
+    
+    private func playHaptic() {
         guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else { return }
-
-        let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.5)
-        let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)
-        let event = CHHapticEvent(eventType: .hapticTransient,
-                              parameters: [intensity, sharpness],
-                              relativeTime: 0)
-
+        
         do {
-            let pattern = try CHHapticPattern(events: [event], parameters: [])
-            let player = try engine?.makePlayer(with: pattern)
-            try player?.start(atTime: 0)
+            let intensity = CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.5)
+            let sharpness = CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.5)
+            let pattern = try CHHapticPattern(events: [
+                CHHapticEvent(eventType: .hapticTransient, parameters: [intensity, sharpness], relativeTime: 0)
+            ], parameters: [])
+            try engine?.makePlayer(with: pattern).start(atTime: 0)
         } catch {
-            print("Failed to play haptic: \(error.localizedDescription)")
+            print("Haptic failed: \(error.localizedDescription)")
         }
     }
 }
-
 import SwiftUI
 import Charts
 
@@ -989,120 +1022,121 @@ import SwiftUI
 struct CategoryBreakdownSection: View {
     let categories: [(category: String, amount: Double, icon: String, percentage: Double)]
     let animate: Bool
-    @State private var showDetailView = false
+    @Namespace private var namespace
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Spending by Category")
-                .font(.headline)
-                .foregroundColor(colorScheme == .dark ? .white : .black)
-            
-            if categories.isEmpty {
-                HStack {
-                    Spacer()
-                    VStack(spacing: 8) {
-                        Image(systemName: "chart.pie")
-                            .font(.system(size: 32))
-                            .foregroundColor((colorScheme == .dark ? Color.white : Color.gray).opacity(0.5))
-                        Text("No expenses in this period")
-                            .font(.subheadline)
-                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .gray)
-                    }
-                    .padding(.vertical, 24)
-                    Spacer()
-                }
-                .padding()
-                .background(colorScheme == .dark ? Color(UIColor.systemGray6) : .white)
-                .cornerRadius(16)
-                .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
-            } else {
-                HStack(spacing: 16) {
-                    ZStack {
-                        Circle()
-                            .stroke(lineWidth: 14)
-                            .foregroundColor(Color.gray.opacity(0.1))
-                            .frame(width: 100, height: 100)
-                        
-                        ForEach(0..<min(categories.count, 5), id: \.self) { index in
-                            let startAngle = getStartAngle(at: index)
-                            let endAngle = animate ? getEndAngle(at: index) : startAngle
-                            
-                            Circle()
-                                .trim(from: startAngle/360, to: endAngle/360)
-                                .stroke(style: StrokeStyle(lineWidth: 14, lineCap: .round))
-                                .foregroundColor(getCategoryColor(at: index))
-                                .rotationEffect(Angle(degrees: -90))
-                                .frame(width: 100, height: 100)
-                                .animation(.easeInOut(duration: 1.0).delay(0.1 * Double(index)), value: animate)
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Spending by Category")
+                    .font(.headline)
+                    .foregroundColor(colorScheme == .dark ? .white : .black)
+                
+                if categories.isEmpty {
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 8) {
+                            Image(systemName: "chart.pie")
+                                .font(.system(size: 32))
+                                .foregroundColor((colorScheme == .dark ? Color.white : Color.gray).opacity(0.5))
+                            Text("No expenses in this period")
+                                .font(.subheadline)
+                                .foregroundColor(colorScheme == .dark ? .white.opacity(0.8) : .gray)
                         }
-                        
-                        VStack {
-                            Text("Total")
-                                .font(.caption2)
-                                .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
-                            Text("$\(String(format: "%.0f", categories.reduce(0) { $0 + $1.amount }))")
-                                .font(.body.bold())
-                                .foregroundColor(colorScheme == .dark ? .white : .black)
-                                .opacity(animate ? 1 : 0)
-                                .animation(.easeIn(duration: 0.6).delay(0.3), value: animate)
-                        }
+                        .padding(.vertical, 24)
+                        Spacer()
                     }
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(0..<min(categories.count, 5), id: \.self) { index in
-                            let category = categories[index]
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(getCategoryColor(at: index))
-                                    .frame(width: 12, height: 12)
-                                    .scaleEffect(animate ? 1 : 0.1)
-                                    .animation(.spring(response: 0.6, dampingFraction: 0.7).delay(0.1 * Double(index)), value: animate)
-                                
-                                Image(systemName: category.icon)
-                                    .font(.caption2)
-                                    .foregroundColor(colorScheme == .dark ? .white : .black)
-                                    .opacity(animate ? 1 : 0)
-                                    .animation(.easeIn(duration: 0.5).delay(0.2 + 0.1 * Double(index)), value: animate)
-                                
-                                Text(category.category)
-                                    .font(.caption)
-                                    .foregroundColor(colorScheme == .dark ? .white : .black)
-                                    .lineLimit(1)
-                                    .opacity(animate ? 1 : 0)
-                                    .animation(.easeIn(duration: 0.5).delay(0.3 + 0.1 * Double(index)), value: animate)
-                                
-                                Spacer()
-                                
-                                Text("\(animate ? Int(category.percentage) : 0)%")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
-                                    .animation(.easeInOut(duration: 1.0).delay(0.4 + 0.1 * Double(index)), value: animate)
-                            }
-                        }
+                    .padding()
+                    .background(colorScheme == .dark ? Color(UIColor.systemGray6) : .white)
+                    .cornerRadius(16)
+                    .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+                } else {
+                    NavigationLink {
+                        SimplifiedCategoryDetailView(categories: categories)
+                            .navigationTransition(.zoom(sourceID: "categoryZoom", in: namespace))
+                    } label: {
+                        breakdownChart
+                            .matchedTransitionSource(id: "categoryZoom", in: namespace)
                     }
-                }
-                .padding()
-                .background(colorScheme == .dark ? Color(UIColor.systemGray6) : .white)
-                .cornerRadius(16)
-                .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
-                .onTapGesture {
-                    withAnimation {
-                        showDetailView = true
-                    }
-                }
-                .fullScreenCover(isPresented: $showDetailView) {
-                    SimplifiedCategoryDetailView(
-                        categories: categories,
-                        showDetailView: $showDetailView
-                    )
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
+                    .buttonStyle(.plain)
                 }
             }
         }
     }
+    
+    private var breakdownChart: some View {
+        HStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .stroke(lineWidth: 14)
+                    .foregroundColor(Color.gray.opacity(0.1))
+                    .frame(width: 100, height: 100)
+                
+                ForEach(0..<min(categories.count, 5), id: \.self) { index in
+                    let startAngle = getStartAngle(at: index)
+                    let endAngle = animate ? getEndAngle(at: index) : startAngle
+                    
+                    Circle()
+                        .trim(from: startAngle/360, to: endAngle/360)
+                        .stroke(style: StrokeStyle(lineWidth: 14, lineCap: .round))
+                        .foregroundColor(getCategoryColor(at: index))
+                        .rotationEffect(Angle(degrees: -90))
+                        .frame(width: 100, height: 100)
+                        .animation(.easeInOut(duration: 1.0).delay(0.1 * Double(index)), value: animate)
+                }
+                
+                VStack {
+                    Text("Total")
+                        .font(.caption2)
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                    Text("$\(String(format: "%.0f", categories.reduce(0) { $0 + $1.amount }))")
+                        .font(.body.bold())
+                        .foregroundColor(colorScheme == .dark ? .white : .black)
+                        .opacity(animate ? 1 : 0)
+                        .animation(.easeIn(duration: 0.6).delay(0.3), value: animate)
+                }
+            }
+            
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(0..<min(categories.count, 5), id: \.self) { index in
+                    let category = categories[index]
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(getCategoryColor(at: index))
+                            .frame(width: 12, height: 12)
+                            .scaleEffect(animate ? 1 : 0.1)
+                            .animation(.spring(response: 0.6, dampingFraction: 0.7).delay(0.1 * Double(index)), value: animate)
+                        
+                        Image(systemName: category.icon)
+                            .font(.caption2)
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                            .opacity(animate ? 1 : 0)
+                            .animation(.easeIn(duration: 0.5).delay(0.2 + 0.1 * Double(index)), value: animate)
+                        
+                        Text(category.category)
+                            .font(.caption)
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                            .lineLimit(1)
+                            .opacity(animate ? 1 : 0)
+                            .animation(.easeIn(duration: 0.5).delay(0.3 + 0.1 * Double(index)), value: animate)
+                        
+                        Spacer()
+                        
+                        Text("\(animate ? Int(category.percentage) : 0)%")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                            .animation(.easeInOut(duration: 1.0).delay(0.4 + 0.1 * Double(index)), value: animate)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(colorScheme == .dark ? Color(UIColor.systemGray6) : .white)
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
+    }
+    
     private func getCategoryColor(at index: Int) -> Color {
         let colors: [Color] = [
             AppTheme.primary,
@@ -1113,198 +1147,177 @@ struct CategoryBreakdownSection: View {
         ]
         return colors[index % colors.count]
     }
-    
+
     private func getStartAngle(at index: Int) -> Double {
-        if index == 0 {
-            return 0
-        }
-        
+        if index == 0 { return 0 }
         var sum: Double = 0
-        for i in 0..<index {
-            sum += categories[i].percentage
-        }
-        return sum * 3.6 // Convert percentage to degrees
+        for i in 0..<index { sum += categories[i].percentage }
+        return sum * 3.6
     }
-    
+
     private func getEndAngle(at index: Int) -> Double {
         var sum: Double = 0
-        for i in 0...index {
-            sum += categories[i].percentage
-        }
-        return sum * 3.6 // Convert percentage to degrees
+        for i in 0...index { sum += categories[i].percentage }
+        return sum * 3.6
     }
 }
-
 struct SimplifiedCategoryDetailView: View {
     let categories: [(category: String, amount: Double, icon: String, percentage: Double)]
-    @Binding var showDetailView: Bool
+    
     @State private var selectedCategoryIndex: Int? = nil
     @State private var animate = false
     @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
-        NavigationView {
-            ZStack {
-                (colorScheme == .dark ? Color.black : Color(UIColor.systemGroupedBackground))
-                    .edgesIgnoringSafeArea(.all)
-                
-                VStack(spacing: 20) {
-                    // Large animated donut chart
-                    ZStack {
-                        Circle()
-                            .stroke(lineWidth: 30)
-                            .foregroundColor(Color.gray.opacity(0.1))
-                            .frame(width: 220, height: 220)
+        ZStack {
+            (colorScheme == .dark ? Color.black : Color(UIColor.systemGroupedBackground))
+                .edgesIgnoringSafeArea(.all)
+            
+            VStack(spacing: 20) {
+                // Large animated donut chart
+                ZStack {
+                    Circle()
+                        .stroke(lineWidth: 30)
+                        .foregroundColor(Color.gray.opacity(0.1))
+                        .frame(width: 220, height: 220)
+                    
+                    ForEach(0..<categories.count, id: \.self) { index in
+                        let startAngle = getStartAngle(at: index)
+                        let endAngle = animate ? getEndAngle(at: index) : startAngle
+                        let isSelected = selectedCategoryIndex == index
                         
+                        Circle()
+                            .trim(from: startAngle / 360, to: endAngle / 360)
+                            .stroke(style: StrokeStyle(lineWidth: isSelected ? 34 : 30, lineCap: .round))
+                            .foregroundColor(getCategoryColor(at: index))
+                            .rotationEffect(.degrees(-90))
+                            .frame(width: 220, height: 220)
+                            .animation(.easeInOut(duration: 1.2).delay(0.05 * Double(index)), value: animate)
+                            .scaleEffect(isSelected ? 1.05 : 1.0)
+                            .animation(.spring(response: 0.3), value: selectedCategoryIndex)
+                            .onTapGesture {
+                                withAnimation {
+                                    selectedCategoryIndex = (selectedCategoryIndex == index) ? nil : index
+                                }
+                            }
+                    }
+
+                    VStack {
+                        if let selectedIndex = selectedCategoryIndex {
+                            let category = categories[selectedIndex]
+                            VStack(spacing: 4) {
+                                Image(systemName: category.icon)
+                                    .font(.system(size: 24))
+                                    .foregroundColor(getCategoryColor(at: selectedIndex))
+                                
+                                Text(category.category)
+                                    .font(.headline)
+                                    .foregroundColor(colorScheme == .dark ? .white : .black)
+                                
+                                Text("$\(String(format: "%.2f", category.amount))")
+                                    .font(.title2.bold())
+                                    .foregroundColor(colorScheme == .dark ? .white : .black)
+                                
+                                Text("\(Int(category.percentage))%")
+                                    .font(.subheadline)
+                                    .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                            }
+                            .transition(.opacity.combined(with: .scale))
+                            .id("selected-\(selectedIndex)")
+                        } else {
+                            VStack {
+                                Text("Total")
+                                    .font(.headline)
+                                    .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                                
+                                Text("$\(String(format: "%.2f", categories.reduce(0) { $0 + $1.amount }))")
+                                    .font(.title.bold())
+                                    .foregroundColor(colorScheme == .dark ? .white : .black)
+                            }
+                            .transition(.opacity.combined(with: .scale))
+                            .id("total")
+                        }
+                    }
+                    .animation(.easeInOut, value: selectedCategoryIndex)
+                }
+                .padding(.top, 20)
+                
+                // Categories list
+                ScrollView {
+                    VStack(spacing: 12) {
                         ForEach(0..<categories.count, id: \.self) { index in
-                            let startAngle = getStartAngle(at: index)
-                            let endAngle = animate ? getEndAngle(at: index) : startAngle
+                            let category = categories[index]
                             let isSelected = selectedCategoryIndex == index
                             
-                            Circle()
-                                .trim(from: startAngle / 360, to: endAngle / 360)
-                                .stroke(style: StrokeStyle(lineWidth: isSelected ? 34 : 30, lineCap: .round))
-                                .foregroundColor(getCategoryColor(at: index))
-                                .rotationEffect(.degrees(-90))
-                                .frame(width: 220, height: 220)
-                                .animation(.easeInOut(duration: 1.2).delay(0.05 * Double(index)), value: animate)
-                                .scaleEffect(isSelected ? 1.05 : 1.0)
-                                .animation(.spring(response: 0.3), value: selectedCategoryIndex)
-                                .onTapGesture {
-                                    withAnimation {
-                                        selectedCategoryIndex = (selectedCategoryIndex == index) ? nil : index
-                                    }
-                                }
-                        }
-
-                        VStack {
-                            if let selectedIndex = selectedCategoryIndex {
-                                let category = categories[selectedIndex]
-                                VStack(spacing: 4) {
-                                    Image(systemName: category.icon)
-                                        .font(.system(size: 24))
-                                        .foregroundColor(getCategoryColor(at: selectedIndex))
+                            HStack(spacing: 12) {
+                                ZStack {
+                                    Circle()
+                                        .fill(getCategoryColor(at: index))
+                                        .frame(width: 36, height: 36)
                                     
+                                    Image(systemName: category.icon)
+                                        .font(.system(size: 16))
+                                        .foregroundColor(.white)
+                                }
+                                .opacity(animate ? 1 : 0)
+                                .scaleEffect(animate ? (isSelected ? 1.1 : 1.0) : 0.5)
+                                .animation(.spring(response: 0.5, dampingFraction: 0.7).delay(0.05 * Double(index)), value: animate)
+                                .animation(.spring(response: 0.3), value: selectedCategoryIndex)
+                                
+                                VStack(alignment: .leading, spacing: 4) {
                                     Text(category.category)
                                         .font(.headline)
                                         .foregroundColor(colorScheme == .dark ? .white : .black)
+                                        .opacity(animate ? 1 : 0)
+                                        .animation(.easeIn(duration: 0.5).delay(0.1 + 0.05 * Double(index)), value: animate)
                                     
-                                    Text("$\(String(format: "%.2f", category.amount))")
-                                        .font(.title2.bold())
-                                        .foregroundColor(colorScheme == .dark ? .white : .black)
-                                    
-                                    Text("\(Int(category.percentage))%")
+                                    Text("\(Int(category.percentage))% of total")
                                         .font(.subheadline)
                                         .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
-                                }
-                                .transition(.opacity.combined(with: .scale))
-                                .id("selected-\(selectedIndex)")
-                            } else {
-                                VStack {
-                                    Text("Total")
-                                        .font(.headline)
-                                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
-                                    
-                                    Text("$\(String(format: "%.2f", categories.reduce(0) { $0 + $1.amount }))")
-                                        .font(.title.bold())
-                                        .foregroundColor(colorScheme == .dark ? .white : .black)
-                                }
-                                .transition(.opacity.combined(with: .scale))
-                                .id("total")
-                            }
-                        }
-                        .animation(.easeInOut, value: selectedCategoryIndex)
-                    }
-                    .padding(.top, 20)
-                    
-                    // Categories list
-                    ScrollView {
-                        VStack(spacing: 12) {
-                            ForEach(0..<categories.count, id: \.self) { index in
-                                let category = categories[index]
-                                let isSelected = selectedCategoryIndex == index
-                                
-                                HStack(spacing: 12) {
-                                    ZStack {
-                                        Circle()
-                                            .fill(getCategoryColor(at: index))
-                                            .frame(width: 36, height: 36)
-                                        
-                                        Image(systemName: category.icon)
-                                            .font(.system(size: 16))
-                                            .foregroundColor(.white)
-                                    }
-                                    .opacity(animate ? 1 : 0)
-                                    .scaleEffect(animate ? (isSelected ? 1.1 : 1.0) : 0.5)
-                                    .animation(.spring(response: 0.5, dampingFraction: 0.7).delay(0.05 * Double(index)), value: animate)
-                                    .animation(.spring(response: 0.3), value: selectedCategoryIndex)
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(category.category)
-                                            .font(.headline)
-                                            .foregroundColor(colorScheme == .dark ? .white : .black)
-                                            .opacity(animate ? 1 : 0)
-                                            .animation(.easeIn(duration: 0.5).delay(0.1 + 0.05 * Double(index)), value: animate)
-                                        
-                                        Text("\(Int(category.percentage))% of total")
-                                            .font(.subheadline)
-                                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
-                                            .opacity(animate ? 1 : 0)
-                                            .animation(.easeIn(duration: 0.5).delay(0.15 + 0.05 * Double(index)), value: animate)
-                                    }
-                                    
-                                    Spacer()
-                                    
-                                    Text("$\(String(format: "%.2f", category.amount))")
-                                        .font(.headline)
-                                        .foregroundColor(isSelected ? getCategoryColor(at: index) : (colorScheme == .dark ? .white : .black))
                                         .opacity(animate ? 1 : 0)
-                                        .animation(.easeIn(duration: 0.5).delay(0.2 + 0.05 * Double(index)), value: animate)
-                                        .animation(.easeInOut(duration: 0.3), value: selectedCategoryIndex)
+                                        .animation(.easeIn(duration: 0.5).delay(0.15 + 0.05 * Double(index)), value: animate)
                                 }
-                                .padding(.vertical, 12)
-                                .padding(.horizontal, 16)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .fill(colorScheme == .dark ? Color(UIColor.secondarySystemBackground) : Color.white)
-                                        .shadow(color: isSelected ? getCategoryColor(at: index).opacity(0.2) : Color.black.opacity(0.05),
-                                                radius: isSelected ? 8 : 4,
-                                                x: 0,
-                                                y: isSelected ? 4 : 2)
-                                )
-                                .scaleEffect(isSelected ? 1.02 : 1.0)
-                                .animation(.spring(response: 0.3), value: selectedCategoryIndex)
-                                .onTapGesture {
-                                    withAnimation {
-                                        selectedCategoryIndex = (selectedCategoryIndex == index) ? nil : index
-                                    }
+                                
+                                Spacer()
+                                
+                                Text("$\(String(format: "%.2f", category.amount))")
+                                    .font(.headline)
+                                    .foregroundColor(isSelected ? getCategoryColor(at: index) : (colorScheme == .dark ? .white : .black))
+                                    .opacity(animate ? 1 : 0)
+                                    .animation(.easeIn(duration: 0.5).delay(0.2 + 0.05 * Double(index)), value: animate)
+                                    .animation(.easeInOut(duration: 0.3), value: selectedCategoryIndex)
+                            }
+                            .padding(.vertical, 12)
+                            .padding(.horizontal, 16)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(colorScheme == .dark ? Color(UIColor.secondarySystemBackground) : Color.white)
+                                    .shadow(color: isSelected ? getCategoryColor(at: index).opacity(0.2) : Color.black.opacity(0.05),
+                                            radius: isSelected ? 8 : 4,
+                                            x: 0,
+                                            y: isSelected ? 4 : 2)
+                            )
+                            .scaleEffect(isSelected ? 1.02 : 1.0)
+                            .animation(.spring(response: 0.3), value: selectedCategoryIndex)
+                            .onTapGesture {
+                                withAnimation {
+                                    selectedCategoryIndex = (selectedCategoryIndex == index) ? nil : index
                                 }
                             }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 20)
-                        .padding(.top, 20)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 20)
+                    .padding(.top, 20)
                 }
-                .padding(.top, 16)
             }
-            .navigationBarTitle("Category Details", displayMode: .inline)
-            .navigationBarItems(
-                trailing: Button(action: {
-                    withAnimation {
-                        showDetailView = false
-                    }
-                }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
-                        .font(.system(size: 24))
-                }
-            )
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    withAnimation(.easeOut(duration: 0.8)) {
-                        animate = true
-                    }
+            .padding(.top, 16)
+        }
+        .navigationBarTitle("Category Details", displayMode: .inline)
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                withAnimation(.easeOut(duration: 0.8)) {
+                    animate = true
                 }
             }
         }
@@ -1327,12 +1340,11 @@ struct SimplifiedCategoryDetailView: View {
         if index == 0 {
             return 0
         }
-        
         var sum: Double = 0
         for i in 0..<index {
             sum += categories[i].percentage
         }
-        return sum * 3.6 // Convert percentage to degrees
+        return sum * 3.6
     }
     
     private func getEndAngle(at index: Int) -> Double {
@@ -1340,7 +1352,7 @@ struct SimplifiedCategoryDetailView: View {
         for i in 0...index {
             sum += categories[i].percentage
         }
-        return sum * 3.6 // Convert percentage to degrees
+        return sum * 3.6
     }
 }
 import SwiftUI
@@ -1845,44 +1857,64 @@ class StoryManager: ObservableObject {
             return
         }
         
-        // Calculate metrics for the past week
+        // Calculate metrics for the week that just FINISHED
         let calendar = Calendar.current
         let today = Date()
-        let oneWeekAgo = calendar.date(byAdding: .day, value: -7, to: today)!
-        let twoWeeksAgo = calendar.date(byAdding: .day, value: -14, to: oneWeekAgo)!
         
-        // Current week metrics
-        let currentWeekExpenses = transactions.filter { $0.type == .expense && $0.date >= oneWeekAgo && $0.date <= today }
-        let weeklySpending = currentWeekExpenses.reduce(0) { $0 + $1.amount }
+        // Find the most recent Monday (start of current week)
+        var mostRecentMonday = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today))!
         
-        // Previous week metrics for comparison
-        let previousWeekExpenses = transactions.filter { $0.type == .expense && $0.date >= twoWeeksAgo && $0.date < oneWeekAgo }
-        let previousWeekSpending = previousWeekExpenses.reduce(0) { $0 + $1.amount }
+        // The end of last week is the day before the most recent Monday
+        let endOfLastWeek = calendar.date(byAdding: .day, value: -1, to: mostRecentMonday)!
+        
+        // The start of last week is 7 days before the end of last week
+        let startOfLastWeek = calendar.date(byAdding: .day, value: -6, to: endOfLastWeek)!
+        
+        // The end of two weeks ago is the day before the start of last week
+        let endOfTwoWeeksAgo = calendar.date(byAdding: .day, value: -1, to: startOfLastWeek)!
+        
+        // The start of two weeks ago is 7 days before the end of two weeks ago
+        let startOfTwoWeeksAgo = calendar.date(byAdding: .day, value: -6, to: endOfTwoWeeksAgo)!
+        
+        // Last week's expenses (week that just finished)
+        let lastWeekExpenses = transactions.filter { $0.type == .expense && $0.date >= startOfLastWeek && $0.date <= endOfLastWeek }
+        let lastWeekSpending = lastWeekExpenses.reduce(0) { $0 + $1.amount }
+        
+        // Two weeks ago metrics for comparison
+        let twoWeeksAgoExpenses = transactions.filter { $0.type == .expense && $0.date >= startOfTwoWeeksAgo && $0.date <= endOfTwoWeeksAgo }
+        let twoWeeksAgoSpending = twoWeeksAgoExpenses.reduce(0) { $0 + $1.amount }
         
         // Calculate change
-        let spendingChange = previousWeekSpending != 0 ? weeklySpending - previousWeekSpending : weeklySpending
+        let spendingChange = twoWeeksAgoSpending != 0 ? lastWeekSpending - twoWeeksAgoSpending : lastWeekSpending
         
-        // Find top spending category
-        let expensesByCategory = Dictionary(grouping: currentWeekExpenses) { $0.category }
+        // Find top spending category for last week
+        let expensesByCategory = Dictionary(grouping: lastWeekExpenses) { $0.category }
         let categorySums = expensesByCategory.mapValues { transactions in
             transactions.reduce(0) { $0 + $1.amount }
         }
         
         let topCategory = categorySums.max(by: { $0.value < $1.value })
         
-        // Calculate current balance
-        let income = transactions.filter { $0.type == .income }.reduce(0) { $0 + $1.amount }
-        let expense = transactions.filter { $0.type == .expense }.reduce(0) { $0 + $1.amount }
-        let currentBalance = income - expense
+        // Calculate balance for the last week
+        let lastWeekIncome = transactions.filter { $0.type == .income && $0.date >= startOfLastWeek && $0.date <= endOfLastWeek }.reduce(0) { $0 + $1.amount }
+        let lastWeekExpense = transactions.filter { $0.type == .expense && $0.date >= startOfLastWeek && $0.date <= endOfLastWeek }.reduce(0) { $0 + $1.amount }
+        let lastWeekBalance = lastWeekIncome - lastWeekExpense
         
         // Create the weekly stories
         var stories: [FinancialStory] = []
         
+        // Format date range for the title
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MMM d"
+        let startDateStr = dateFormatter.string(from: startOfLastWeek)
+        let endDateStr = dateFormatter.string(from: endOfLastWeek)
+        let dateRangeStr = "\(startDateStr) - \(endDateStr)"
+        
         // 1. Weekly Spending Story
         stories.append(
             FinancialStory(
-                title: "Weekly Spending",
-                value: "$\(String(format: "%.2f", weeklySpending))",
+                title: "Last Week's Spending",
+                value: "$\(String(format: "%.2f", lastWeekSpending))",
                 change: spendingChange >= 0 ? "+$\(String(format: "%.2f", abs(spendingChange)))" : "-$\(String(format: "%.2f", abs(spendingChange)))",
                 isPositive: spendingChange < 0, // Less spending = positive
                 emoji: "💰",
@@ -1894,7 +1926,7 @@ class StoryManager: ObservableObject {
         if let top = topCategory {
             stories.append(
                 FinancialStory(
-                    title: "Top Category",
+                    title: "Top Category (\(dateRangeStr))",
                     value: top.key,
                     change: "$\(String(format: "%.2f", top.value))",
                     isPositive: false,
@@ -1905,7 +1937,7 @@ class StoryManager: ObservableObject {
         } else {
             stories.append(
                 FinancialStory(
-                    title: "Top Category",
+                    title: "Top Category (\(dateRangeStr))",
                     value: "No Expenses",
                     change: "$0.00",
                     isPositive: true,
@@ -1918,8 +1950,8 @@ class StoryManager: ObservableObject {
         // 3. Weekly Balance Story
         stories.append(
             FinancialStory(
-                title: "Weekly Balance",
-                value: "$\(String(format: "%.2f", currentBalance))",
+                title: "Last Week's Balance",
+                value: "$\(String(format: "%.2f", lastWeekBalance))",
                 change: spendingChange >= 0 ? "-$\(String(format: "%.2f", abs(spendingChange)))" : "+$\(String(format: "%.2f", abs(spendingChange)))",
                 isPositive: spendingChange < 0,
                 emoji: "✨",
@@ -1929,7 +1961,6 @@ class StoryManager: ObservableObject {
         
         self.weeklyStory = stories
     }
-    
     func generateMonthlyStory() {
         // Check if there are any transactions before proceeding
         if transactions.isEmpty {
@@ -1937,45 +1968,48 @@ class StoryManager: ObservableObject {
             return
         }
         
-        // Calculate metrics for the previous completed month, not the current one
+        // Calculate metrics for the month that JUST FINISHED, not the current one
         let calendar = Calendar.current
         let today = Date()
         
         // Get start of current month
         let startOfCurrentMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
         
-        // Get start of previous month
-        let startOfPreviousMonth = calendar.date(byAdding: .month, value: -1, to: startOfCurrentMonth)!
+        // Get start of previous month (the month that just finished)
+        let startOfLastMonth = calendar.date(byAdding: .month, value: -1, to: startOfCurrentMonth)!
         
         // Get end of previous month (which is right before start of current month)
-        let endOfPreviousMonth = calendar.date(byAdding: .second, value: -1, to: startOfCurrentMonth)!
+        let endOfLastMonth = calendar.date(byAdding: .second, value: -1, to: startOfCurrentMonth)!
         
         // Get start of two months ago (for comparison)
-        let startOfTwoMonthsAgo = calendar.date(byAdding: .month, value: -1, to: startOfPreviousMonth)!
+        let startOfTwoMonthsAgo = calendar.date(byAdding: .month, value: -1, to: startOfLastMonth)!
         
-        // Current metrics now reflect the PREVIOUS month, not the current one
-        let previousMonthExpenses = transactions.filter { $0.type == .expense && $0.date >= startOfPreviousMonth && $0.date <= endOfPreviousMonth }
-        let previousMonthSpending = previousMonthExpenses.reduce(0) { $0 + $1.amount }
+        // Get end of two months ago (which is right before start of last month)
+        let endOfTwoMonthsAgo = calendar.date(byAdding: .second, value: -1, to: startOfLastMonth)!
+        
+        // Last month's expenses (month that just finished)
+        let lastMonthExpenses = transactions.filter { $0.type == .expense && $0.date >= startOfLastMonth && $0.date <= endOfLastMonth }
+        let lastMonthSpending = lastMonthExpenses.reduce(0) { $0 + $1.amount }
         
         // Two months ago metrics for comparison
-        let twoMonthsAgoExpenses = transactions.filter { $0.type == .expense && $0.date >= startOfTwoMonthsAgo && $0.date < startOfPreviousMonth }
+        let twoMonthsAgoExpenses = transactions.filter { $0.type == .expense && $0.date >= startOfTwoMonthsAgo && $0.date <= endOfTwoMonthsAgo }
         let twoMonthsAgoSpending = twoMonthsAgoExpenses.reduce(0) { $0 + $1.amount }
         
         // Calculate change
-        let spendingChange = twoMonthsAgoSpending != 0 ? previousMonthSpending - twoMonthsAgoSpending : previousMonthSpending
+        let spendingChange = twoMonthsAgoSpending != 0 ? lastMonthSpending - twoMonthsAgoSpending : lastMonthSpending
         
-        // Calculate savings trend for the previous month
-        let previousMonthSavings = transactions.filter { $0.type == .savings && $0.date >= startOfPreviousMonth && $0.date <= endOfPreviousMonth }.reduce(0) { $0 + $1.amount }
-        let twoMonthsAgoSavings = transactions.filter { $0.type == .savings && $0.date >= startOfTwoMonthsAgo && $0.date < startOfPreviousMonth }.reduce(0) { $0 + $1.amount }
-        let savingsChange = previousMonthSavings - twoMonthsAgoSavings
+        // Calculate savings trend for the last month
+        let lastMonthSavings = transactions.filter { $0.type == .savings && $0.date >= startOfLastMonth && $0.date <= endOfLastMonth }.reduce(0) { $0 + $1.amount }
+        let twoMonthsAgoSavings = transactions.filter { $0.type == .savings && $0.date >= startOfTwoMonthsAgo && $0.date <= endOfTwoMonthsAgo }.reduce(0) { $0 + $1.amount }
+        let savingsChange = lastMonthSavings - twoMonthsAgoSavings
         
-        // Calculate investment performance for the previous month
-        let previousMonthInvestments = transactions.filter { $0.type == .investment && $0.date >= startOfPreviousMonth && $0.date <= endOfPreviousMonth }.reduce(0) { $0 + $1.amount }
+        // Calculate investment performance for the last month
+        let lastMonthInvestments = transactions.filter { $0.type == .investment && $0.date >= startOfLastMonth && $0.date <= endOfLastMonth }.reduce(0) { $0 + $1.amount }
         
-        // Format previous month name - explicitly using the end of previous month
+        // Format last month name
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "MMMM yyyy"
-        let previousMonthName = dateFormatter.string(from: startOfPreviousMonth)
+        let lastMonthName = dateFormatter.string(from: startOfLastMonth)
         
         // Create monthly stories
         var stories: [FinancialStory] = []
@@ -1983,8 +2017,8 @@ class StoryManager: ObservableObject {
         // 1. Monthly Spending Story
         stories.append(
             FinancialStory(
-                title: "Monthly Spending",
-                value: "$\(String(format: "%.2f", previousMonthSpending))",
+                title: "\(lastMonthName) Spending",
+                value: "$\(String(format: "%.2f", lastMonthSpending))",
                 change: spendingChange >= 0 ? "+$\(String(format: "%.2f", abs(spendingChange)))" : "-$\(String(format: "%.2f", abs(spendingChange)))",
                 isPositive: spendingChange < 0, // Less spending = positive
                 emoji: "📊",
@@ -1995,8 +2029,8 @@ class StoryManager: ObservableObject {
         // 2. Savings Story
         stories.append(
             FinancialStory(
-                title: "Monthly Savings",
-                value: "$\(String(format: "%.2f", previousMonthSavings))",
+                title: "\(lastMonthName) Savings",
+                value: "$\(String(format: "%.2f", lastMonthSavings))",
                 change: savingsChange >= 0 ? "+$\(String(format: "%.2f", abs(savingsChange)))" : "-$\(String(format: "%.2f", abs(savingsChange)))",
                 isPositive: savingsChange >= 0,
                 emoji: "💸",
@@ -2004,17 +2038,38 @@ class StoryManager: ObservableObject {
             )
         )
         
-        // 3. Investment Story
-        stories.append(
-            FinancialStory(
-                title: "Investments",
-                value: "$\(String(format: "%.2f", previousMonthInvestments))",
-                change: "\(previousMonthName)",
-                isPositive: true,
-                emoji: "📈",
-                backgroundColor: Color(hex: "8676FF")
+        // Find top spending category for last month
+        let expensesByCategory = Dictionary(grouping: lastMonthExpenses) { $0.category }
+        let categorySums = expensesByCategory.mapValues { transactions in
+            transactions.reduce(0) { $0 + $1.amount }
+        }
+        
+        let topCategory = categorySums.max(by: { $0.value < $1.value })
+        
+        // 3. Top Category Story instead of Investment Story
+        if let top = topCategory {
+            stories.append(
+                FinancialStory(
+                    title: "Top Category (\(lastMonthName))",
+                    value: top.key,
+                    change: "$\(String(format: "%.2f", top.value))",
+                    isPositive: false,
+                    emoji: "🛒",
+                    backgroundColor: Color(hex: "8676FF")
+                )
             )
-        )
+        } else {
+            stories.append(
+                FinancialStory(
+                    title: "Top Category (\(lastMonthName))",
+                    value: "No Expenses",
+                    change: "$0.00",
+                    isPositive: true,
+                    emoji: "🛒",
+                    backgroundColor: Color(hex: "8676FF")
+                )
+            )
+        }
         
         self.monthlyStory = stories
     }
@@ -2235,45 +2290,51 @@ struct MonthlyStoryView: View {
     }
 }
 private func monthNameFormatted() -> String {
+    let calendar = Calendar.current
+    let today = Date()
+    
+    // Get the start of current month
+    let startOfCurrentMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: today))!
+    
+    // Get the previous month (the month that just finished)
+    let previousMonth = calendar.date(byAdding: .month, value: -1, to: startOfCurrentMonth)!
+    
+    // Format the date
     let dateFormatter = DateFormatter()
     dateFormatter.dateFormat = "MMMM yyyy"
-    return dateFormatter.string(from: Date())
+    return dateFormatter.string(from: previousMonth)
 }
 
-
+// MARK: - Fixed Weekly date range formatter
 private func weekDateRangeFormatted() -> String {
     let calendar = Calendar.current
     let today = Date()
     
-    // Find the most recent Sunday (start of week)
-    let weekday = calendar.component(.weekday, from: today)
-    let daysToSubtract = weekday == 1 ? 7 : weekday - 1
+    // Find the most recent Monday (start of current week)
+    var mostRecentMonday = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: today))!
     
-    guard let startOfWeek = calendar.date(byAdding: .day, value: -daysToSubtract, to: today) else {
-        return "This Week"
-    }
+    // The end of last week is the day before the most recent Monday
+    let endOfLastWeek = calendar.date(byAdding: .day, value: -1, to: mostRecentMonday)!
     
-    // Find the end of week (Saturday)
-    guard let endOfWeek = calendar.date(byAdding: .day, value: 6, to: startOfWeek) else {
-        return "This Week"
-    }
+    // The start of last week is 7 days before the end of last week
+    let startOfLastWeek = calendar.date(byAdding: .day, value: -6, to: endOfLastWeek)!
     
     // Format the dates
     let dateFormatter = DateFormatter()
     dateFormatter.dateFormat = "MMMM d"
     
     // For the end date, check if it's in the same month
-    let startMonth = calendar.component(.month, from: startOfWeek)
-    let endMonth = calendar.component(.month, from: endOfWeek)
+    let startMonth = calendar.component(.month, from: startOfLastWeek)
+    let endMonth = calendar.component(.month, from: endOfLastWeek)
     
-    let startDateString = dateFormatter.string(from: startOfWeek)
+    let startDateString = dateFormatter.string(from: startOfLastWeek)
     
     if startMonth == endMonth {
         // If same month, just show the day for end date
         dateFormatter.dateFormat = "d"
     }
     
-    let endDateString = dateFormatter.string(from: endOfWeek)
+    let endDateString = dateFormatter.string(from: endOfLastWeek)
     
     return "\(startDateString) - \(endDateString)"
 }

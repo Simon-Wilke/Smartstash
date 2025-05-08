@@ -838,7 +838,7 @@ struct CategoryFilterButton: View {
                 .font(.caption)
                 .fontWeight(.semibold)
                 .foregroundColor(isSelected ? .white : (colorScheme == .dark ? .gray : .gray))
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .background(
                     Capsule()

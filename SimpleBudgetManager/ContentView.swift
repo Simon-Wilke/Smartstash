@@ -1002,7 +1002,7 @@ struct TrendCard: View {
         Button(action: onTap) {
             VStack(spacing: 4) {
                 HStack {
-                    Image(systemName: trendPercentage >= 0 ? "chart.line.uptrend.xyaxis" : "chart.line.downtrend.xyaxis")
+                    Image(systemName: trendPercentage >= 0 ? "arrow.up.right.circle.fill" : "arrow.down.right.circle.fill")
                         .font(.headline)
                         .foregroundColor(color)
                     Text("Trend")
@@ -1016,7 +1016,7 @@ struct TrendCard: View {
                     .foregroundColor(color)
             }
             .frame(minWidth: 0, maxWidth: .infinity)
-            .frame(minHeight: 58, maxHeight: 58)
+            .frame(minHeight: 53, maxHeight: 53)
             .padding(8)
             .background(colorScheme == .dark ? Color.gray.opacity(0.3) : color.opacity(0.12))
             .cornerRadius(10)
@@ -1631,7 +1631,7 @@ struct TransactionListView: View {
                         } else {
                             HStack(spacing: 6) {
                                 Circle()
-                                    .fill(Color.blue.opacity(colorScheme == .dark ? 1.0 : 0.2))
+                                    .fill(Color.primaryBluePurple.opacity(colorScheme == .dark ? 1.0 : 0.2))
                                     .frame(width: 8, height: 8)
                                 
                                 Text("\(upcomingTransactions.count) transactions in next \(calculateUpcomingWindow()) days")
@@ -2022,42 +2022,34 @@ struct FilterButton: View {
     var color: Color = .gray
     var action: () -> Void
 
-    private let feedbackGenerator = UIImpactFeedbackGenerator(style: .light)
+    private let feedbackGenerator = UIImpactFeedbackGenerator(style: .soft)
 
     @State private var isPressed = false
     @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
         Button(action: {
-            feedbackGenerator.prepare()
-            feedbackGenerator.impactOccurred()
-            action()
+            let impact = UIImpactFeedbackGenerator(style: .light) // Haptic feedback
+            impact.impactOccurred()
+            action() // Perform the original action
         }) {
             Text(title)
-                .font(.custom("Roboto-black", size: 14))
-                .fontWeight(.heavy)
+                .font(.custom("Roboto-Medium", size: 14))
+                .fontWeight(.semibold)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
                 .background(
                     isSelected
-                        ? Color.gray
-                        : Color.gray.opacity(colorScheme == .dark ? 0.3 : 0.1)
+                    ? color.opacity(colorScheme == .dark ? 0.7 : 0.2)
+                    : Color.gray.opacity(colorScheme == .dark ? 0.3 : 0.1)
                 )
                 .foregroundColor(
-                    isSelected ? (colorScheme == .dark ? Color.black : Color.white)
-                               : (colorScheme == .dark ? Color.white : Color.gray)
+                    isSelected
+                    ? (colorScheme == .dark ? .white : color)
+                    : (colorScheme == .dark ? .white : .gray)
                 )
-                .cornerRadius(10)
-                .shadow(color: isPressed ? Color.black.opacity(0.15) : .clear, radius: isPressed ? 3 : 0, x: 0, y: 1)
-                .scaleEffect(isPressed ? 0.95 : 1.0)
-                .animation(.easeOut(duration: 0.1), value: isPressed)
+                .cornerRadius(20)
         }
-        .buttonStyle(PlainButtonStyle())
-        .onLongPressGesture(
-            minimumDuration: 0.1,
-            pressing: { isPressed = $0 },
-            perform: {}
-        )
     }
 }
 
@@ -3042,121 +3034,135 @@ struct ContentView: View {
     }
     
     private var floatingActionButton: some View {
-        VStack {
-            Spacer()
-            HStack {
+            VStack {
                 Spacer()
-                ZStack {
-                    // Child camera button - only shown after long press
-                    if showingChildButton {
-                        Button(action: {}) { // Empty action - handled by gestures
-                            Image(systemName: "text.viewfinder")
-                                .foregroundStyle(.white)
-                                .font(.headline)
-                                .padding(12)
-                                .background(childButtonHighlighted ? childButtonColor.opacity(0.8) : childButtonColor)
-                                .clipShape(Circle())
-                                .scaleEffect(childButtonHighlighted ? 1.1 : 1.0)
-                                .shadow(radius: 5)
+                HStack {
+                    Spacer()
+                    ZStack {
+                        // Child camera button - only shown after long press
+                        if showingChildButton {
+                            Button(action: {}) { // Empty action - handled by gestures
+                                Image(systemName: "text.viewfinder")
+                                    .foregroundStyle(.white)
+                                    .font(.headline)
+                                    .padding(12)
+                                    .background(
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [
+                                                Color.purple,
+                                                Color(red: 0.5, green: 0.2, blue: 0.8) // A fun purple shade
+                                            ]),
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .clipShape(Circle())
+                                    .scaleEffect(childButtonHighlighted ? 1.1 : 1.0)
+                                    .shadow(radius: 5)
+                            }
+                            .offset(x: 0, y: -70) // Position above main button
+                            .transition(.scale.combined(with: .opacity))
                         }
-                        .offset(x: 0, y: -70) // Position above main button
-                        .transition(.scale.combined(with: .opacity))
-                    }
-                    
-                    // Main button with separate gesture handlers
-                    Image(systemName: "plus")
-                        .foregroundStyle(.white)
-                        .font(.title)
-                        .padding()
-                        .background(bluePurpleColor)
-                        .clipShape(Circle())
-                        .scaleEffect(isLongPressing ? 1.1 : 1.0)
-                        .shadow(radius: 10)
-                        // Tap gesture - immediately open add transaction view
-                        .onTapGesture {
-                            // Provide light tap haptic feedback
-                            let generator = UIImpactFeedbackGenerator(style: .light)
-                            generator.impactOccurred()
-                            
-                            // Only show transaction view, don't show child button
-                            showingAddTransaction = true
-                        }
-                        // Long press gesture - show child button
-                        .onLongPressGesture(minimumDuration: 2.0, pressing: { isPressing in
-                            if isPressing {
-                                // Provide medium haptic feedback when starting long press
-                                let generator = UIImpactFeedbackGenerator(style: .medium)
+                        
+                        // Main button with separate gesture handlers
+                        Image(systemName: "plus")
+                            .foregroundStyle(.white)
+                            .font(.title)
+                            .padding()
+                            .background(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [bluePurpleColor, bluePurpleColor.opacity(0.6)]),
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .clipShape(Circle())
+                            .scaleEffect(isLongPressing ? 1.1 : 1.0)
+                            .shadow(radius: 10)
+                            // Tap gesture - immediately open add transaction view
+                            .onTapGesture {
+                                // Provide light tap haptic feedback
+                                let generator = UIImpactFeedbackGenerator(style: .light)
                                 generator.impactOccurred()
                                 
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                                    isLongPressing = true
-                                    showChildButton()
-                                }
-                            } else if isLongPressing {
-                                // Released without sliding to child button
-                                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                                    isLongPressing = false
-                                    // Don't hide child button yet, use timer
-                                    startAutoHideTimer()
-                                }
+                                // Only show transaction view, don't show child button
+                                showingAddTransaction = true
                             }
-                        }, perform: {
-                            // Nothing needed here - we handle everything in pressing parameter
-                        })
-                        // Drag gesture - only active when long pressing
-                        .simultaneousGesture(
-                            DragGesture(minimumDistance: 10)
-                                .onChanged { value in
-                                    // Only process drag if we're long pressing
-                                    if isLongPressing && showingChildButton {
-                                        // Check if dragged up to child button (negative y is upward)
-                                        let isOverChildButton = value.translation.height < -50
-                                        
-                                        // Provide subtle haptic feedback when crossing threshold
-                                        if isOverChildButton != childButtonHighlighted {
-                                            let generator = UIImpactFeedbackGenerator(style: .soft)
-                                            generator.impactOccurred()
-                                        }
-                                        
-                                        withAnimation(.spring(response: 0.2, dampingFraction: 0.7)) {
-                                            childButtonHighlighted = isOverChildButton
-                                        }
+                            // Long press gesture - show child button
+                            .onLongPressGesture(minimumDuration: 2.0, pressing: { isPressing in
+                                if isPressing {
+                                    // Provide medium haptic feedback when starting long press
+                                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                                    generator.impactOccurred()
+                                    
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                        isLongPressing = true
+                                        showChildButton()
+                                    }
+                                } else if isLongPressing {
+                                    // Released without sliding to child button
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                        isLongPressing = false
+                                        // Don't hide child button yet, use timer
+                                        startAutoHideTimer()
                                     }
                                 }
-                                .onEnded { value in
-                                    if isLongPressing && showingChildButton {
-                                        let isOverChildButton = value.translation.height < -50
-                                        
-                                        if isOverChildButton {
-                                            // If finger released over child button, trigger receipt scanner
-                                            // Provide success haptic feedback
-                                            let generator = UINotificationFeedbackGenerator()
-                                            generator.notificationOccurred(.success)
+                            }, perform: {
+                                // Nothing needed here - we handle everything in pressing parameter
+                            })
+                            // Drag gesture - only active when long pressing
+                            .simultaneousGesture(
+                                DragGesture(minimumDistance: 10)
+                                    .onChanged { value in
+                                        // Only process drag if we're long pressing
+                                        if isLongPressing && showingChildButton {
+                                            // Check if dragged up to child button (negative y is upward)
+                                            let isOverChildButton = value.translation.height < -50
                                             
-                                            showingReceiptScanner = true
-                                            
-                                            // Reset all states
-                                            withAnimation(.spring(response: 0.4, dampingFraction: 0.65)) {
-                                                childButtonHighlighted = false
-                                                isLongPressing = false
-                                                hideChildButton()
+                                            // Provide subtle haptic feedback when crossing threshold
+                                            if isOverChildButton != childButtonHighlighted {
+                                                let generator = UIImpactFeedbackGenerator(style: .soft)
+                                                generator.impactOccurred()
                                             }
-                                        } else {
-                                            // Reset highlight state but keep child button visible temporarily
-                                            childButtonHighlighted = false
-                                            startAutoHideTimer()
+                                            
+                                            withAnimation(.spring(response: 0.2, dampingFraction: 0.7)) {
+                                                childButtonHighlighted = isOverChildButton
+                                            }
                                         }
                                     }
-                                }
-                        )
+                                    .onEnded { value in
+                                        if isLongPressing && showingChildButton {
+                                            let isOverChildButton = value.translation.height < -50
+                                            
+                                            if isOverChildButton {
+                                                // If finger released over child button, trigger receipt scanner
+                                                // Provide success haptic feedback
+                                                let generator = UINotificationFeedbackGenerator()
+                                                generator.notificationOccurred(.success)
+                                                
+                                                showingReceiptScanner = true
+                                                
+                                                // Reset all states
+                                                withAnimation(.spring(response: 0.4, dampingFraction: 0.65)) {
+                                                    childButtonHighlighted = false
+                                                    isLongPressing = false
+                                                    hideChildButton()
+                                                }
+                                            } else {
+                                                // Reset highlight state but keep child button visible temporarily
+                                                childButtonHighlighted = false
+                                                startAutoHideTimer()
+                                            }
+                                        }
+                                    }
+                            )
+                    }
+                    .padding()
+                    .padding(.trailing, -4)
+                    .padding(.bottom, 50)
                 }
-                .padding()
-                .padding(.trailing, -4)
-                .padding(.bottom, 50)
             }
         }
-    }
-
     // Function to show child button
     private func showChildButton() {
         // Cancel any existing timer

@@ -137,7 +137,7 @@ struct AllTransactionsView: View {
                                 ? (colorScheme == .dark ? .white : bluePurpleColor)
                                 : (colorScheme == .dark ? .white : .gray)
                             )
-                            .cornerRadius(10)
+                            .cornerRadius(20)
                         }
                         
                         // Sort button
@@ -196,7 +196,7 @@ struct AllTransactionsView: View {
                                 ? (colorScheme == .dark ? .white : bluePurpleColor)
                                 : (colorScheme == .dark ? .white : .gray)
                             )
-                            .cornerRadius(10)
+                            .cornerRadius(20)
                         }
 
                         Divider()
@@ -813,7 +813,7 @@ struct TransactionFilterButton: View {
                     ? (colorScheme == .dark ? .white : color)
                     : (colorScheme == .dark ? .white : .gray)
                 )
-                .cornerRadius(10)
+                .cornerRadius(20)
         }
     }
 }

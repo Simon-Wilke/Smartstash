@@ -56,7 +56,7 @@ struct SettingsView: View {
                 Section(header: Text("Danger Zone")) {
                     Button(action: { showDeleteAllAlert = true }) {
                         HStack {
-                            Image(systemName: "trash")
+                            Image(systemName: "folder.badge.minus")
                                 .foregroundColor(.red)
                             Text("Delete All Transactions")
                                 .foregroundColor(.red)
@@ -91,7 +91,7 @@ struct SettingsView: View {
                 }
                 
                 Section {
-                    VStack(alignment: .center) {
+                    VStack(alignment: .center, spacing: 4) {
                         Text("Smartstash")
                             .font(.headline)
                         Text("Version 0.1.0")
@@ -103,18 +103,12 @@ struct SettingsView: View {
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
                             .padding(.top, 2)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                
-                
-                Section {
-                    VStack {
-                        Text("Made with ❤️ by Simon in 🇺🇸 ")
+                        
+                        Text("Made by Simon in USA")
                             .font(.footnote)
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
-                            .padding(.top, 0)
+                            .padding(.top, 2)
                     }
                     .frame(maxWidth: .infinity)
                 }
