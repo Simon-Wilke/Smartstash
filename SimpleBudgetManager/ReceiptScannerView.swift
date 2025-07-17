@@ -27,7 +27,6 @@ class TransactionCoordinator: ObservableObject {
     }
 }
 
-// Update the ReceiptOCRManager class to extract dates
 class ReceiptOCRManager {
     // MARK: - Properties
     private var isProcessing: Bool = false
@@ -50,432 +49,237 @@ class ReceiptOCRManager {
             return
         }
         
-        // Create a new Vision text recognition request
         let request = VNRecognizeTextRequest { [weak self] request, error in
-            guard let self = self, error == nil, let observations = request.results as? [VNRecognizedTextObservation] else {
+            guard let self = self, error == nil,
+                  let observations = request.results as? [VNRecognizedTextObservation] else {
                 self?.completeProcess(with: "Text recognition failed", date: nil, success: false)
                 return
             }
             
-            // Extract text with locations for better context analysis
-            var textBlocks: [(text: String, boundingBox: CGRect)] = []
+            // Extract all text with confidence scores
+            var allText: [String] = []
+            var textBlocks: [(text: String, boundingBox: CGRect, confidence: Float)] = []
             
             for observation in observations {
-                if let candidate = observation.topCandidates(1).first {
-                    // Convert normalized coordinates to points in the image
-                    let boundingBox = observation.boundingBox
-                    textBlocks.append((text: candidate.string, boundingBox: boundingBox))
+                guard let candidate = observation.topCandidates(1).first else { continue }
+                
+                // Only include text with reasonable confidence
+                if candidate.confidence > 0.3 {
+                    allText.append(candidate.string)
+                    textBlocks.append((
+                        text: candidate.string,
+                        boundingBox: observation.boundingBox,
+                        confidence: candidate.confidence
+                    ))
                 }
             }
             
-            // Sort text blocks by vertical position (top to bottom)
-            let sortedBlocks = textBlocks.sorted { $0.boundingBox.minY > $1.boundingBox.minY }
+            // Sort blocks by vertical position (top to bottom)
+            textBlocks.sort { $0.boundingBox.maxY > $1.boundingBox.maxY }
             
-            // Process all recognized text with position information
-            let recognizedText = sortedBlocks.map { $0.text }.joined(separator: "\n")
+            let fullText = allText.joined(separator: "\n")
+            print("=== FULL OCR TEXT ===")
+            print(fullText)
+            print("===================")
             
-            // Extract total and date using multiple strategies
-            self.extractTotal(from: recognizedText, sortedBlocks: sortedBlocks)
-            self.extractDate(from: recognizedText, sortedBlocks: sortedBlocks)
+            // Extract date and amount
+            let extractedDate = self.extractDate(from: fullText, textBlocks: textBlocks)
+            let extractedAmount = self.extractAmount(from: fullText, textBlocks: textBlocks)
+            
+            print("Extracted date: \(extractedDate?.description ?? "nil")")
+            print("Extracted amount: \(extractedAmount)")
+            
+            self.completeProcess(with: extractedAmount, date: extractedDate, success: !extractedAmount.isEmpty)
         }
         
-        // Configure the text recognition request for better accuracy
+        // Configure for better accuracy
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
-        request.recognitionLanguages = ["en-US"]  // Set appropriate language for better recognition
+        request.recognitionLanguages = ["en-US", "en-CA"]
+        request.automaticallyDetectsLanguage = true
         
-        // Create a request handler and perform the request
         let requestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try requestHandler.perform([request])
             } catch {
-                print("Error performing OCR: \(error)")
+                print("OCR Error: \(error)")
                 self.completeProcess(with: "OCR processing failed", date: nil, success: false)
             }
         }
     }
     
-    private func extractDate(from text: String, sortedBlocks: [(text: String, boundingBox: CGRect)]) {
-        // Find potential date strings in the text
-        var extractedDate: Date? = nil
+    // MARK: - Date Extraction
+    private func extractDate(from text: String, textBlocks: [(text: String, boundingBox: CGRect, confidence: Float)]) -> Date? {
+        print("=== DATE EXTRACTION DEBUG ===")
         
-        // Strategy 1: Look for common date patterns in the entire text
-        if let date = findDateByPatterns(in: text) {
-            extractedDate = date
+        // Strategy 1: Use NSDataDetector for built-in date detection
+        if let detectedDate = extractDateUsingDetector(from: text) {
+            print("Found date using NSDataDetector: \(detectedDate)")
+            return detectedDate
         }
         
-        // Strategy 2: Look for date headers in the top portion of the receipt
-        if extractedDate == nil {
-            // Focus on the top third of the receipt where date is typically found
-            let topBlocks = Array(sortedBlocks.suffix(sortedBlocks.count * 2/3))
-            if let date = findDateInTopBlocks(topBlocks) {
-                extractedDate = date
+        // Strategy 2: Manual pattern matching with common formats
+        if let patternDate = extractDateUsingPatterns(from: text) {
+            print("Found date using patterns: \(patternDate)")
+            return patternDate
+        }
+        
+        // Strategy 3: Look in top portion of receipt (common location)
+        let topBlocks = Array(textBlocks.suffix(textBlocks.count / 2))
+        for block in topBlocks {
+            if let blockDate = extractDateUsingPatterns(from: block.text) {
+                print("Found date in top block: \(blockDate)")
+                return blockDate
             }
         }
         
-        // Strategy 3: Look near transaction keywords
-        if extractedDate == nil {
-            if let date = findDateNearKeywords(in: sortedBlocks) {
-                extractedDate = date
-            }
-        }
-        
-        // Use fallback to today's date if no date was found
-        self.recognizedDate = extractedDate
+        print("No date found")
+        return nil
     }
     
-    private func findDateByPatterns(in text: String) -> Date? {
-        // Common date patterns to look for
+    private func extractDateUsingDetector(from text: String) -> Date? {
+        do {
+            let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
+            let matches = detector.matches(in: text, options: [], range: NSRange(location: 0, length: text.utf16.count))
+            
+            let calendar = Calendar.current
+            let now = Date()
+            let threeYearsAgo = calendar.date(byAdding: .year, value: -3, to: now)!
+            let oneMonthFromNow = calendar.date(byAdding: .month, value: 1, to: now)!
+            
+            // Find the most reasonable date
+            for match in matches {
+                guard let date = match.date else { continue }
+                
+                // Filter out unreasonable dates
+                if date >= threeYearsAgo && date <= oneMonthFromNow {
+                    return date
+                }
+            }
+        } catch {
+            print("NSDataDetector error: \(error)")
+        }
+        
+        return nil
+    }
+    
+    private func extractDateUsingPatterns(from text: String) -> Date? {
         let datePatterns = [
-            // MM/DD/YYYY or MM/DD/YY
-            "\\b(0?[1-9]|1[0-2])[\\/\\-\\.](0?[1-9]|[12][0-9]|3[01])[\\/\\-\\.](19|20)?\\d{2}\\b",
-            // DD/MM/YYYY or DD/MM/YY
-            "\\b(0?[1-9]|[12][0-9]|3[01])[\\/\\-\\.](0?[1-9]|1[0-2])[\\/\\-\\.](19|20)?\\d{2}\\b",
-            // YYYY/MM/DD
-            "\\b(19|20)\\d{2}[\\/\\-\\.](0?[1-9]|1[0-2])[\\/\\-\\.](0?[1-9]|[12][0-9]|3[01])\\b",
+            // MM/DD/YYYY, MM/DD/YY
+            ("(\\d{1,2})/(\\d{1,2})/(\\d{2,4})", "MM/dd/yyyy"),
+            // DD/MM/YYYY, DD/MM/YY
+            ("(\\d{1,2})/(\\d{1,2})/(\\d{2,4})", "dd/MM/yyyy"),
+            // YYYY-MM-DD
+            ("(\\d{4})-(\\d{1,2})-(\\d{1,2})", "yyyy-MM-dd"),
+            // MM-DD-YYYY
+            ("(\\d{1,2})-(\\d{1,2})-(\\d{2,4})", "MM-dd-yyyy"),
             // Month DD, YYYY
-            "\\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* (0?[1-9]|[12][0-9]|3[01])(st|nd|rd|th)?,? ?(19|20)?\\d{2}\\b",
+            ("(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* (\\d{1,2}),? (\\d{4})", "MMM d, yyyy"),
             // DD Month YYYY
-            "\\b(0?[1-9]|[12][0-9]|3[01])(st|nd|rd|th)? (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* ?,? ?(19|20)?\\d{2}\\b"
+            ("(\\d{1,2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* (\\d{4})", "d MMM yyyy")
         ]
         
         let dateFormatter = DateFormatter()
-        dateFormatter.locale = Locale(identifier: "en_US")
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateFormatter.timeZone = TimeZone.current
         
-        // Try different date formats
-        let dateFormats = [
-            "MM/dd/yyyy", "MM/dd/yy", "M/d/yyyy", "M/d/yy",
-            "dd/MM/yyyy", "dd/MM/yy", "d/M/yyyy", "d/M/yy",
-            "yyyy/MM/dd", "yyyy-MM-dd", "yyyy.MM.dd",
-            "MMMM d, yyyy", "MMM d, yyyy", "MMMM d yyyy", "MMM d yyyy",
-            "d MMMM yyyy", "d MMM yyyy"
-        ]
-        
-        // First try to find dates using regular expressions
-        for pattern in datePatterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+        for (pattern, format) in datePatterns {
+            do {
+                let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
                 let nsString = text as NSString
-                let range = NSRange(location: 0, length: nsString.length)
-                let matches = regex.matches(in: text, options: [], range: range)
+                let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsString.length))
                 
                 for match in matches {
-                    let dateString = nsString.substring(with: match.range)
+                    let matchedString = nsString.substring(with: match.range)
+                    print("Trying to parse date: '\(matchedString)' with format: '\(format)'")
                     
-                    // Try each date format
-                    for format in dateFormats {
-                        dateFormatter.dateFormat = format
-                        if let date = dateFormatter.date(from: dateString) {
-                            // Validate the date is reasonable (not too far in the past or future)
+                    // Try different format variations
+                    let formats = [format, format.replacingOccurrences(of: "yyyy", with: "yy")]
+                    
+                    for tryFormat in formats {
+                        dateFormatter.dateFormat = tryFormat
+                        if let date = dateFormatter.date(from: matchedString) {
+                            // Validate date is reasonable
                             let calendar = Calendar.current
-                            let oneYearAgo = calendar.date(byAdding: .year, value: -1, to: Date())!
-                            let oneMonthLater = calendar.date(byAdding: .month, value: 1, to: Date())!
+                            let now = Date()
+                            let threeYearsAgo = calendar.date(byAdding: .year, value: -3, to: now)!
+                            let oneMonthFromNow = calendar.date(byAdding: .month, value: 1, to: now)!
                             
-                            if date >= oneYearAgo && date <= oneMonthLater {
+                            if date >= threeYearsAgo && date <= oneMonthFromNow {
                                 return date
                             }
                         }
                     }
                 }
-            }
-        }
-        
-        // If regex patterns didn't work, try a more brute-force approach with NSDataDetector
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
-            let matches = detector.matches(in: text, options: [], range: NSRange(location: 0, length: text.utf16.count))
-            
-            if let match = matches.first, let date = match.date {
-                // Similar validation
-                let calendar = Calendar.current
-                let oneYearAgo = calendar.date(byAdding: .year, value: -1, to: Date())!
-                let oneMonthLater = calendar.date(byAdding: .month, value: 1, to: Date())!
-                
-                if date >= oneYearAgo && date <= oneMonthLater {
-                    return date
-                }
+            } catch {
+                print("Regex error for pattern \(pattern): \(error)")
             }
         }
         
         return nil
     }
     
-    private func findDateInTopBlocks(_ blocks: [(text: String, boundingBox: CGRect)]) -> Date? {
-        for block in blocks {
-            let text = block.text
-            
-            // Look for lines that likely contain date information
-            let dateKeywords = ["date:", "date", "issued", "invoice date", "receipt date", "transaction date"]
-            var isDateLine = false
-            
-            for keyword in dateKeywords {
-                if text.lowercased().contains(keyword) {
-                    isDateLine = true
-                    break
-                }
-            }
-            
-            if isDateLine || text.lowercased().contains("20") || text.contains("/") {
-                // This line might contain a date, try to extract it
-                if let date = findDateByPatterns(in: text) {
-                    return date
-                }
-            }
+    // MARK: - Amount Extraction
+    private func extractAmount(from text: String, textBlocks: [(text: String, boundingBox: CGRect, confidence: Float)]) -> String {
+        print("=== AMOUNT EXTRACTION DEBUG ===")
+        
+        var candidates: [(amount: Double, confidence: Double, source: String)] = []
+        
+        // Strategy 1: Look for explicit total indicators
+        candidates.append(contentsOf: findAmountsWithTotalKeywords(in: text))
+        
+        // Strategy 2: Look in bottom portion (where totals usually are)
+        candidates.append(contentsOf: findAmountsInBottomSection(textBlocks: textBlocks))
+        
+        // Strategy 3: Find largest reasonable amount
+        candidates.append(contentsOf: findLargestReasonableAmount(in: text))
+        
+        // Sort by confidence and select best candidate
+        candidates.sort { $0.confidence > $1.confidence }
+        
+        print("Amount candidates found:")
+        for candidate in candidates.prefix(5) {
+            print("  $\(String(format: "%.2f", candidate.amount)) - confidence: \(candidate.confidence) - source: \(candidate.source)")
         }
         
-        return nil
+        if let bestCandidate = candidates.first {
+            return String(format: "%.2f", bestCandidate.amount)
+        }
+        
+        return ""
     }
     
-    private func findDateNearKeywords(in blocks: [(text: String, boundingBox: CGRect)]) -> Date? {
-        // Look for date near transaction-related keywords
-        let transactionKeywords = ["transaction", "purchase", "payment", "order", "invoice"]
+    private func findAmountsWithTotalKeywords(in text: String) -> [(amount: Double, confidence: Double, source: String)] {
+        var results: [(amount: Double, confidence: Double, source: String)] = []
         
-        for (index, block) in blocks.enumerated() {
-            let text = block.text.lowercased()
-            
-            // Check if this block contains transaction keywords
-            var isTransactionLine = false
-            for keyword in transactionKeywords {
-                if text.contains(keyword) {
-                    isTransactionLine = true
-                    break
-                }
-            }
-            
-            if isTransactionLine {
-                // Check this line and surrounding lines for dates
-                let surroundingBlocks = [
-                    index > 0 ? blocks[index - 1].text : "",
-                    block.text,
-                    index < blocks.count - 1 ? blocks[index + 1].text : ""
-                ]
-                
-                for blockText in surroundingBlocks {
-                    if let date = findDateByPatterns(in: blockText) {
-                        return date
-                    }
-                }
-            }
-        }
-        
-        return nil
-    }
-    
-    private func extractTotal(from text: String, sortedBlocks: [(text: String, boundingBox: CGRect)]) {
-        // Try multiple strategies to find the most likely total
-        var potentialTotals: [(amount: String, confidence: Double)] = []
-        
-        // Strategy 1: Position-aware pattern matching (focus on bottom of receipt)
-        potentialTotals.append(contentsOf: findTotalsByPosition(in: sortedBlocks))
-        
-        // Strategy 2: Keyword-based pattern matching with prioritization
-        potentialTotals.append(contentsOf: findTotalsByKeywords(in: text))
-        
-        // Strategy 3: Amount format validation
-        potentialTotals.append(contentsOf: findAllPossibleAmounts(in: text))
-        
-        // Strategy 4: Structural analysis - usually the final amount is near the bottom after subtotal
-        if let structuralTotal = findTotalByStructure(in: sortedBlocks) {
-            potentialTotals.append((structuralTotal, 0.9))
-        }
-        
-        // Sort potential totals by confidence and select the best one
-        let sortedTotals = potentialTotals.sorted { $0.confidence > $1.confidence }
-        
-        if let bestMatch = sortedTotals.first {
-            // Format the total amount properly
-            let formattedTotal = formatCurrency(bestMatch.amount)
-            completeProcess(with: formattedTotal, date: self.recognizedDate, success: true)
-        } else {
-            completeProcess(with: "No total found", date: self.recognizedDate, success: false)
-        }
-    }
-    
-    private func findTotalsByPosition(in blocks: [(text: String, boundingBox: CGRect)]) -> [(amount: String, confidence: Double)] {
-        var results: [(amount: String, confidence: Double)] = []
-        
-        // Focus on the bottom third of the receipt where total is typically found
-        let bottomBlocks = blocks.prefix(blocks.count / 3)
-        
-        for (index, block) in bottomBlocks.enumerated() {
-            let text = block.text.lowercased()
-            
-            // Keywords that likely indicate a total amount
-            let totalKeywords = ["total", "amount due", "amount paid", "grand total", "visa", "mastercard", "amex", "payment"]
-            let subtotalKeywords = ["subtotal", "sub-total", "pre-tax", "before tax"]
-            
-            // Check if this block contains any total-related keywords
-            var isTotal = false
-            var isSubtotal = false
-            
-            for keyword in totalKeywords {
-                if text.contains(keyword) {
-                    isTotal = true
-                    break
-                }
-            }
-            
-            for keyword in subtotalKeywords {
-                if text.contains(keyword) {
-                    isSubtotal = true
-                    break
-                }
-            }
-            
-            // If this is a subtotal line, skip it
-            if isSubtotal && !isTotal {
-                continue
-            }
-            
-            // If this is a total line or payment method line, look for amount
-            if isTotal {
-                // Try to extract amount from this line
-                if let amount = extractAmountFromLine(text) {
-                    // Higher confidence for blocks with explicit "total" mentioned
-                    let confidence = text.contains("total") ? 0.95 : 0.85
-                    results.append((amount, confidence))
-                }
-                
-                // Also check the next line in case the amount is on a separate line
-                if index < bottomBlocks.count - 1 {
-                    let nextLine = bottomBlocks[index + 1].text
-                    if let amount = extractAmountFromLine(nextLine) {
-                        results.append((amount, 0.8))
-                    }
-                }
-            }
-        }
-        
-        // Check the last few lines for potential totals - often the very last amount is the total
-        for block in bottomBlocks.prefix(5) {
-            if let amount = extractAmountFromLine(block.text) {
-                // Lower confidence for generic amounts, but still consider them
-                results.append((amount, 0.6))
-            }
-        }
-        
-        return results
-    }
-    
-    private func findTotalsByKeywords(in text: String) -> [(amount: String, confidence: Double)] {
-        var results: [(amount: String, confidence: Double)] = []
-        
-        // High-priority patterns (explicit total indicators)
-        let highPriorityPatterns = [
-            "(?i)total\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)grand\\s*total\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)amount\\s*due\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)amount\\s*paid\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)to\\s*pay\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)balance\\s*due\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)charged\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})"
+        let totalKeywords = [
+            "total", "amount due", "balance due", "grand total",
+            "payment", "charged", "amount paid", "final total"
         ]
         
-        // Payment method related patterns
-        let paymentPatterns = [
-            "(?i)visa\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)mastercard\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)amex\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)credit\\s*card\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)payment\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})",
-            "(?i)card\\s*[:\\$]?\\s*([0-9]+[.,][0-9]{2})"
-        ]
-        
-        // Run high priority patterns first
-        for pattern in highPriorityPatterns {
-            if let regex = try? NSRegularExpression(pattern: pattern) {
-                let nsString = text as NSString
-                let range = NSRange(location: 0, length: nsString.length)
-                
-                let matches = regex.matches(in: text, range: range)
-                for match in matches {
-                    if match.numberOfRanges > 1 {
-                        let matchRange = match.range(at: 1)
-                        if matchRange.location != NSNotFound {
-                            let totalString = nsString.substring(with: matchRange)
-                            results.append((totalString, 0.9))
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Then try payment patterns
-        for pattern in paymentPatterns {
-            if let regex = try? NSRegularExpression(pattern: pattern) {
-                let nsString = text as NSString
-                let range = NSRange(location: 0, length: nsString.length)
-                
-                let matches = regex.matches(in: text, range: range)
-                for match in matches {
-                    if match.numberOfRanges > 1 {
-                        let matchRange = match.range(at: 1)
-                        if matchRange.location != NSNotFound {
-                            let totalString = nsString.substring(with: matchRange)
-                            results.append((totalString, 0.8))
-                        }
-                    }
-                }
-            }
-        }
-        
-        return results
-    }
-    
-    private func findAllPossibleAmounts(in text: String) -> [(amount: String, confidence: Double)] {
-        var results: [(amount: String, confidence: Double)] = []
-        
-        // Generic currency amount patterns
-        let currencyPatterns = [
-            // Currency symbol followed by digits
-            "\\$\\s*([0-9]+[.,][0-9]{2})",
-            // Number with decimal point or comma in currency format
-            "([0-9]+[.,][0-9]{2})\\s*\\$",
-            // Plain number with decimal point that looks like currency
-            "([0-9]+\\.[0-9]{2})"
-        ]
-        
-        let nsString = text as NSString
         let lines = text.components(separatedBy: .newlines)
         
-        // Parse each line separately to maintain context
-        for (lineIndex, line) in lines.enumerated() {
-            // Skip lines with subtotal
-            if line.lowercased().contains("subtotal") || line.lowercased().contains("sub-total") {
+        for line in lines {
+            let lowerLine = line.lowercased()
+            
+            // Skip subtotal lines
+            if lowerLine.contains("subtotal") || lowerLine.contains("sub-total") ||
+               lowerLine.contains("before tax") || lowerLine.contains("pre-tax") {
                 continue
             }
             
-            for pattern in currencyPatterns {
-                if let regex = try? NSRegularExpression(pattern: pattern) {
-                    let lineRange = NSRange(location: 0, length: line.count)
-                    
-                    let matches = regex.matches(in: line, range: lineRange)
-                    for match in matches {
-                        if match.numberOfRanges > 1 {
-                            let matchRange = match.range(at: 1)
-                            if matchRange.location != NSNotFound {
-                                let amountString = (line as NSString).substring(with: matchRange)
-                                
-                                // Calculate confidence based on position and context
-                                var confidence = 0.3  // Base confidence for a currency-formatted number
-                                
-                                // Higher confidence for amounts at the end of the receipt
-                                if lineIndex > lines.count * 2/3 {
-                                    confidence += 0.2
-                                }
-                                
-                                // Higher confidence if line contains total-related terms
-                                let lowerLine = line.lowercased()
-                                if lowerLine.contains("total") || lowerLine.contains("balance") ||
-                                   lowerLine.contains("amount") || lowerLine.contains("pay") {
-                                    confidence += 0.3
-                                }
-                                
-                                results.append((amountString, confidence))
-                            }
+            // Check if line contains total keywords
+            for keyword in totalKeywords {
+                if lowerLine.contains(keyword) {
+                    if let amounts = extractAllAmountsFromLine(line) {
+                        for amount in amounts {
+                            let confidence = keyword == "total" ? 0.9 : 0.8
+                            results.append((amount, confidence, "keyword: \(keyword)"))
                         }
                     }
+                    break
                 }
             }
         }
@@ -483,90 +287,89 @@ class ReceiptOCRManager {
         return results
     }
     
-    private func findTotalByStructure(in blocks: [(text: String, boundingBox: CGRect)]) -> String? {
-        // Look for patterns in the receipt structure:
-        // 1. Usually there's subtotal first
-        // 2. Then tax
-        // 3. Then total/amount due
+    private func findAmountsInBottomSection(textBlocks: [(text: String, boundingBox: CGRect, confidence: Float)]) -> [(amount: Double, confidence: Double, source: String)] {
+        var results: [(amount: Double, confidence: Double, source: String)] = []
         
-        var foundSubtotal = false
-        var foundTax = false
-        var lastAmount: String?
+        // Focus on bottom third of receipt
+        let bottomBlocks = Array(textBlocks.prefix(textBlocks.count / 3))
         
-        for block in blocks {
-            let text = block.text.lowercased()
-            
-            // Check for subtotal indicators
-            if text.contains("subtotal") || text.contains("sub-total") || text.contains("sub total") {
-                foundSubtotal = true
-                continue
+        for (index, block) in bottomBlocks.enumerated() {
+            if let amounts = extractAllAmountsFromLine(block.text) {
+                for amount in amounts {
+                    // Higher confidence for blocks closer to bottom
+                    let positionConfidence = 0.6 + (0.3 * Double(index) / Double(bottomBlocks.count))
+                    results.append((amount, positionConfidence, "bottom section"))
+                }
             }
-            
-            // Check for tax indicators
-            if text.contains("tax") || text.contains("vat") || text.contains("gst") || text.contains("hst") {
-                foundTax = true
-                continue
+        }
+        
+        return results
+    }
+    
+    private func findLargestReasonableAmount(in text: String) -> [(amount: Double, confidence: Double, source: String)] {
+        var results: [(amount: Double, confidence: Double, source: String)] = []
+        var allAmounts: [Double] = []
+        
+        // Find all amounts in the text
+        let lines = text.components(separatedBy: .newlines)
+        for line in lines {
+            if let amounts = extractAllAmountsFromLine(line) {
+                allAmounts.append(contentsOf: amounts)
             }
-            
-            // After seeing subtotal and possibly tax, the next amount is likely the total
-            if foundSubtotal {
-                if let amount = extractAmountFromLine(text) {
-                    lastAmount = amount
-                    
-                    // If this line contains "total" and we already found subtotal, high chance this is it
-                    if text.contains("total") || text.contains("amount due") || text.contains("balance") {
-                        return amount
+        }
+        
+        // Filter out unreasonable amounts (too small or too large)
+        let reasonableAmounts = allAmounts.filter { $0 >= 0.01 && $0 <= 10000.0 }
+        
+        if let maxAmount = reasonableAmounts.max() {
+            // If the largest amount appears multiple times, it's more likely to be the total
+            let occurrences = reasonableAmounts.filter { abs($0 - maxAmount) < 0.01 }.count
+            let confidence = occurrences > 1 ? 0.7 : 0.5
+            results.append((maxAmount, confidence, "largest amount"))
+        }
+        
+        return results
+    }
+    
+    private func extractAllAmountsFromLine(_ line: String) -> [Double]? {
+        var amounts: [Double] = []
+        
+        // Patterns for currency amounts
+        let patterns = [
+            "\\$\\s*([0-9]+(?:[,.][0-9]{2})?)", // $XX.XX or $XX,XX
+            "([0-9]+\\.[0-9]{2})\\s*\\$?", // XX.XX with optional $
+            "([0-9]+,[0-9]{2})\\s*\\$?", // XX,XX with optional $
+            "([0-9]+(?:\\.[0-9]{2})?)\\s*(?:USD|CAD|dollars?)", // XX.XX USD/CAD/dollars
+        ]
+        
+        for pattern in patterns {
+            do {
+                let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+                let nsString = line as NSString
+                let matches = regex.matches(in: line, options: [], range: NSRange(location: 0, length: nsString.length))
+                
+                for match in matches {
+                    if match.numberOfRanges > 1 {
+                        let amountString = nsString.substring(with: match.range(at: 1))
+                        let cleanAmount = amountString.replacingOccurrences(of: ",", with: ".")
+                        
+                        if let amount = Double(cleanAmount), amount > 0 {
+                            amounts.append(amount)
+                        }
                     }
                 }
+            } catch {
+                print("Regex error: \(error)")
             }
         }
         
-        // If we've seen subtotal and tax, the last amount found is likely the total
-        if foundSubtotal && foundTax && lastAmount != nil {
-            return lastAmount
-        }
-        
-        // Otherwise, just return the last amount we found near the bottom
-        return lastAmount
-    }
-    
-    private func extractAmountFromLine(_ line: String) -> String? {
-        // Pattern for currency amounts
-        let pattern = "([0-9]+[.,][0-9]{2})"
-        
-        if let regex = try? NSRegularExpression(pattern: pattern) {
-            let nsString = line as NSString
-            let range = NSRange(location: 0, length: nsString.length)
-            
-            // Find all matches and return the last one (usually the actual amount)
-            let matches = regex.matches(in: line, range: range)
-            if let lastMatch = matches.last, lastMatch.numberOfRanges > 1 {
-                let matchRange = lastMatch.range(at: 1)
-                if matchRange.location != NSNotFound {
-                    return nsString.substring(with: matchRange)
-                }
-            }
-        }
-        
-        return nil
-    }
-    
-    private func formatCurrency(_ amount: String) -> String {
-        // Clean up the amount string
-        var cleanAmount = amount.replacingOccurrences(of: ",", with: ".")
-        
-        // Make sure it's a valid decimal
-        if let value = Double(cleanAmount) {
-            // Format with 2 decimal places
-            return String(format: "%.2f", value)
-        }
-        
-        return amount
+        return amounts.isEmpty ? nil : amounts
     }
     
     private func completeProcess(with result: String, date: Date?, success: Bool) {
         DispatchQueue.main.async {
             self.recognizedTotal = result
+            self.recognizedDate = date
             self.isProcessing = false
             self.showingResults = true
             self.onCompletion?(result, date, success)
@@ -631,57 +434,66 @@ struct ReceiptScannerView: View {
                     }
                     
                     Spacer()
-                    
+
                     // 3D-themed Processing Indicator
                     if isProcessing {
                         VStack(spacing: 20) {
                             ZStack {
-                                // Animated rotating cube effect
-                                ForEach(0..<4) { index in
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(
-                                            LinearGradient(
-                                                gradient: Gradient(colors: [bluePurpleColor.opacity(0.8), Color.gray.opacity(0.6)]),
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            )
-                                        )
-                                        .frame(width: 20, height: 20)
-                                        .rotationEffect(.degrees(Double(index) * 90))
-                                        .offset(y: -30)
-                                        .animation(
-                                            Animation.easeInOut(duration: 1.5)
-                                                .repeatForever()
-                                                .delay(Double(index) * 0.2),
-                                            value: animationTrigger
-                                        )
-                                }
-                                
-                                // Circular spinner
+                                // Main circular spinner
                                 Circle()
+                                    .trim(from: 0, to: 0.75)
                                     .stroke(
                                         AngularGradient(
-                                            gradient: Gradient(colors: [bluePurpleColor.opacity(0.2), bluePurpleColor]),
+                                            gradient: Gradient(colors: [
+                                                bluePurpleColor.opacity(0.2),
+                                                bluePurpleColor,
+                                                bluePurpleColor.opacity(0.8)
+                                            ]),
                                             center: .center
                                         ),
-                                        lineWidth: 4
+                                        style: StrokeStyle(lineWidth: 4, lineCap: .round)
                                     )
                                     .frame(width: 50, height: 50)
                                     .rotationEffect(Angle(degrees: animationTrigger ? 360 : 0))
-                                    .animation(Animation.linear(duration: 2).repeatForever(autoreverses: false), value: animationTrigger)
+                                    .animation(
+                                        Animation.linear(duration: 1.2)
+                                            .repeatForever(autoreverses: false),
+                                        value: animationTrigger
+                                    )
+                                
+                                // Optional: Add a subtle pulsing center dot
+                                Circle()
+                                    .fill(bluePurpleColor.opacity(0.6))
+                                    .frame(width: 8, height: 8)
+                                    .scaleEffect(animationTrigger ? 1.2 : 0.8)
+                                    .animation(
+                                        Animation.easeInOut(duration: 1.0)
+                                            .repeatForever(autoreverses: true),
+                                        value: animationTrigger
+                                    )
                             }
+                            .frame(height: 80) // Fixed container height for stability
                             
                             Text("Processing receipt...")
                                 .font(.headline)
                                 .foregroundColor(bluePurpleColor)
+                                .opacity(animationTrigger ? 1.0 : 0.7)
+                                .animation(
+                                    Animation.easeInOut(duration: 1.0)
+                                        .repeatForever(autoreverses: true),
+                                    value: animationTrigger
+                                )
                         }
                         .padding(.vertical, 20)
                         .onAppear {
-                            // Ensure animations start when view appears
-                            animationTrigger = true
+                            withAnimation {
+                                animationTrigger = true
+                            }
+                        }
+                        .onDisappear {
+                            animationTrigger = false
                         }
                     }
-                    
                     // Scan Button
                     Button(action: {
                         self.showingCamera = true
@@ -726,12 +538,14 @@ struct ReceiptScannerView: View {
             .sheet(isPresented: $showingResults) {
                 ResultsView(
                     recognizedTotal: $recognizedTotal,
+                    recognizedDate: $recognizedDate,
                     coordinator: coordinator,
                     onDismiss: {
                         showingResults = false
                     }
                 )
             }
+
             .fullScreenCover(isPresented: $coordinator.shouldOpenTransactionEntry) {
                 ModifiedAddTransactionView(
                     viewModel: viewModel,
@@ -752,28 +566,28 @@ struct ReceiptScannerView: View {
         }
     }
 }
-
 struct ResultsView: View {
     @Binding var recognizedTotal: String?
+    @Binding var recognizedDate: Date?
     @ObservedObject var coordinator: TransactionCoordinator
     var onDismiss: () -> Void
+
     @State private var amount: Double?
-    @State private var detectedDate: Date?
+    @State private var selectedDate: Date = Date()
+    @State private var isEditingDate = false
     @FocusState private var isAmountFocused: Bool
-    
-    // Date formatter for display
+
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter
     }()
-    
+
     var body: some View {
         ZStack {
-            Color(UIColor.systemBackground)
-                .ignoresSafeArea()
-            
+            Color(UIColor.systemBackground).ignoresSafeArea()
+
             VStack(spacing: 25) {
                 // Header
                 VStack(spacing: 8) {
@@ -781,21 +595,21 @@ struct ResultsView: View {
                         .font(.title)
                         .fontWeight(.bold)
                         .foregroundColor(.primary)
-                    
+
                     Text("Review and confirm the information")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
                 .padding(.top, 20)
-                
-                // Receipt Total Card
-                if let recognizedTotal = recognizedTotal {
-                    VStack(alignment: .center, spacing: 10) {
+
+                // Total Card
+                if let total = recognizedTotal, !total.isEmpty {
+                    VStack(spacing: 10) {
                         Text("Detected Amount")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                        
-                        Text("$\(recognizedTotal)")
+
+                        Text("$\(total)")
                             .font(.system(size: 36, weight: .bold, design: .rounded))
                             .foregroundColor(bluePurpleColor)
                     }
@@ -806,54 +620,79 @@ struct ResultsView: View {
                             .fill(bluePurpleColor.opacity(0.1))
                     )
                     .padding(.horizontal, 24)
-                }
-                
-                // Receipt Date Card (if detected)
-                if let date = detectedDate {
-                    VStack(alignment: .center, spacing: 10) {
-                        Text("Detected Date")
+                } else {
+                    VStack(spacing: 10) {
+                        Text("No Amount Detected")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
-                        
-                        Text(dateFormatter.string(from: date))
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
-                            .foregroundColor(bluePurpleColor)
+
+                        Text("Please enter manually")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
+                    .padding(.vertical, 20)
                     .background(
                         RoundedRectangle(cornerRadius: 16)
-                            .fill(bluePurpleColor.opacity(0.1))
+                            .fill(Color.orange.opacity(0.1))
                     )
                     .padding(.horizontal, 24)
                 }
-                
+
+                // Date Card
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Transaction Date")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+
+                        Spacer()
+
+                        Button("Edit") {
+                            isEditingDate = true
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(bluePurpleColor)
+                    }
+
+                    Text(dateFormatter.string(from: recognizedDate ?? selectedDate))
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundColor(bluePurpleColor)
+                }
+                .padding(.vertical, 16)
+                .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(bluePurpleColor.opacity(0.1))
+                )
+                .padding(.horizontal, 24)
+
                 // Amount Input
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Adjust amount if needed")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                         .padding(.leading, 8)
-                    
+
                     HStack {
                         Text("$")
                             .font(.title3)
                             .foregroundColor(isAmountFocused ? bluePurpleColor : .secondary)
-                        
+
                         TextField("0.00", text: Binding(
                             get: {
                                 if let amount = self.amount {
                                     return String(format: "%.2f", amount)
-                                } else if let recognizedTotal = self.recognizedTotal,
-                                          let numericTotal = Double(recognizedTotal.replacingOccurrences(of: ",", with: ".")) {
-                                    return String(format: "%.2f", numericTotal)
+                                } else if let total = self.recognizedTotal,
+                                          let parsed = Double(total.replacingOccurrences(of: ",", with: ".")) {
+                                    return String(format: "%.2f", parsed)
                                 }
                                 return ""
                             },
                             set: { newValue in
-                                if let numericValue = Double(newValue) {
-                                    self.amount = numericValue
-                                }
+                                let filtered = newValue.filter { $0.isNumber || $0 == "." }
+                                self.amount = Double(filtered)
                             }
                         ))
                         .keyboardType(.decimalPad)
@@ -868,18 +707,18 @@ struct ResultsView: View {
                     )
                 }
                 .padding(.horizontal, 24)
-                
+
                 Spacer()
-                
+
                 // Action Buttons
                 VStack(spacing: 16) {
                     Button(action: {
-                        if let amount = self.amount {
-                            coordinator.setScannedDataAndProceed(amount: amount, date: detectedDate)
-                        } else if let recognizedTotal = self.recognizedTotal,
-                                  let numericTotal = Double(recognizedTotal.replacingOccurrences(of: ",", with: ".")) {
-                            coordinator.setScannedDataAndProceed(amount: numericTotal, date: detectedDate)
-                        }
+                        let finalAmount = getCurrentAmount()
+                        let finalDate = recognizedDate ?? selectedDate
+
+                        guard let amount = finalAmount, amount > 0 else { return }
+
+                        coordinator.setScannedDataAndProceed(amount: amount, date: finalDate)
                         onDismiss()
                     }) {
                         Text("Use This Information")
@@ -891,8 +730,9 @@ struct ResultsView: View {
                             .background(bluePurpleColor)
                             .cornerRadius(16)
                     }
-                    .contentShape(Rectangle())
-                    
+                    .disabled(getCurrentAmount() == nil || getCurrentAmount() == 0)
+                    .opacity(getCurrentAmount() == nil || getCurrentAmount() == 0 ? 0.6 : 1.0)
+
                     Button(action: {
                         onDismiss()
                     }) {
@@ -908,10 +748,48 @@ struct ResultsView: View {
                                     .stroke(bluePurpleColor, lineWidth: 1.5)
                             )
                     }
-                    .contentShape(Rectangle())
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 40)
+            }
+        }
+        .sheet(isPresented: $isEditingDate) {
+            NavigationView {
+                VStack {
+                    DatePicker(
+                        "Select Date",
+                        selection: $selectedDate,
+                        in: Calendar.current.date(byAdding: .year, value: -2, to: Date())!...Date(),
+                        displayedComponents: .date
+                    )
+                    .datePickerStyle(.wheel)
+                    .labelsHidden()
+
+                    Spacer()
+                }
+                .padding()
+                .navigationTitle("Select Date")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Cancel") {
+                            isEditingDate = false
+                        }
+                    }
+
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") {
+                            recognizedDate = selectedDate
+                            isEditingDate = false
+                        }
+                        .fontWeight(.semibold)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            if let recognized = recognizedDate {
+                selectedDate = recognized
             }
         }
         .toolbar {
@@ -923,6 +801,16 @@ struct ResultsView: View {
                 .foregroundColor(bluePurpleColor)
             }
         }
+    }
+
+    private func getCurrentAmount() -> Double? {
+        if let amount = self.amount {
+            return amount
+        } else if let total = recognizedTotal,
+                  let parsed = Double(total.replacingOccurrences(of: ",", with: ".")) {
+            return parsed
+        }
+        return nil
     }
 }
 
@@ -1340,22 +1228,48 @@ class CustomCameraViewController: UIViewController {
     private var cancelButton: UIButton!
     private var receiptOverlayView: UIView!
     private var flashButton: UIButton!
+    private var torchButton: UIButton!
+    private var overlayView: UIView!
+    private var maskView: UIView!
+
+    private var captureIndicator: UIView!
+    private var topControlsStackView: UIStackView!
+    private var bottomControlsView: UIView!
+    private var guidanceLabel: UILabel!
+    private var guidanceLabelContainer: UIView!
+    private var cornerViews: [UIView] = []
+    
     private var isFlashEnabled = false
+    private var isTorchEnabled = false
+    private var isUsingFrontCamera = false
+    private var currentCameraInput: AVCaptureDeviceInput?
     
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = .black
         setupCaptureSession()
         setupUI()
+        setupGestures()
     }
     
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         startCaptureSession()
+        animateGuidanceAppearance()
     }
     
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         stopCaptureSession()
+    }
+    
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateOverlayMask()
+    }
+    
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        return .lightContent
     }
     
     private func setupCaptureSession() {
@@ -1369,6 +1283,8 @@ class CustomCameraViewController: UIViewController {
             showAlert(title: "Camera Error", message: "Unable to access the camera")
             return
         }
+        
+        currentCameraInput = input
         
         if captureSession.canAddInput(input) {
             captureSession.addInput(input)
@@ -1387,143 +1303,351 @@ class CustomCameraViewController: UIViewController {
         previewLayer?.videoGravity = .resizeAspectFill
         
         // Set session preset for better quality
-        captureSession.sessionPreset = .high
-    }
-    class PaddedLabel: UILabel {
-        var contentInset: UIEdgeInsets = .zero
-
-        override func drawText(in rect: CGRect) {
-            let insetRect = rect.inset(by: contentInset)
-            super.drawText(in: insetRect)
-        }
-
-        override var intrinsicContentSize: CGSize {
-            let size = super.intrinsicContentSize
-            return CGSize(width: size.width + contentInset.left + contentInset.right,
-                          height: size.height + contentInset.top + contentInset.bottom)
-        }
+        captureSession.sessionPreset = .photo
     }
     
     private func setupUI() {
-        // Add preview layer
-        if let previewLayer = previewLayer {
-            previewLayer.frame = view.bounds
-            view.layer.addSublayer(previewLayer)
-        }
-        
-        // Setup receipt overlay guide (semi-transparent rectangle)
+        setupPreviewLayer()
+        setupOverlayGuide()
+        setupTopControls()
+        setupBottomControls()
+        setupCaptureIndicator()
+        layoutConstraints()
+    }
+    
+    private func setupPreviewLayer() {
+        guard let previewLayer = previewLayer else { return }
+        previewLayer.frame = view.bounds
+        view.layer.addSublayer(previewLayer)
+    }
+    
+    private func setupOverlayGuide() {
+        // Create the clear rectangle for receipt area
         receiptOverlayView = UIView()
         receiptOverlayView.translatesAutoresizingMaskIntoConstraints = false
-        receiptOverlayView.layer.borderColor = UIColor.white.cgColor
-        receiptOverlayView.layer.borderWidth = 2.0
-        receiptOverlayView.layer.cornerRadius = 12
-        receiptOverlayView.backgroundColor = UIColor.white.withAlphaComponent(0.1)
+        receiptOverlayView.backgroundColor = .clear
         view.addSubview(receiptOverlayView)
         
-        let guideLabel = PaddedLabel()
-        guideLabel.translatesAutoresizingMaskIntoConstraints = false
-        guideLabel.text = "Position receipt within frame"
-        guideLabel.textColor = .white
-        guideLabel.textAlignment = .center
-        guideLabel.font = UIFont.systemFont(ofSize: 14, weight: .medium)
-        guideLabel.backgroundColor = UIColor.black.withAlphaComponent(0.6)
-        guideLabel.layer.cornerRadius = 8
-        guideLabel.clipsToBounds = true
-        guideLabel.contentInset = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
-        view.addSubview(guideLabel)
+        // Create corner indicators
+        createCornerIndicators()
         
-        // Setup shutter button - with container view
-        let shutterContainer = UIView()
-        shutterContainer.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(shutterContainer)
+        // Create container for guidance label with proper padding
+        guidanceLabelContainer = UIView()
+        guidanceLabelContainer.translatesAutoresizingMaskIntoConstraints = false
+        guidanceLabelContainer.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        guidanceLabelContainer.layer.cornerRadius = 12
+        guidanceLabelContainer.clipsToBounds = true
+        guidanceLabelContainer.alpha = 0
+        view.addSubview(guidanceLabelContainer)
         
-        // Create outer circle button
-        shutterButton = UIButton(type: .custom)
-        shutterButton.translatesAutoresizingMaskIntoConstraints = false
-        shutterButton.backgroundColor = getBluePurpleColor()
-        shutterButton.layer.cornerRadius = 35
-        shutterButton.clipsToBounds = true
-        shutterContainer.addSubview(shutterButton)
-        
-        // Create inner white circle as a subview with smaller constraints
-        let innerCircle = UIView()
-        innerCircle.translatesAutoresizingMaskIntoConstraints = false
-        innerCircle.backgroundColor = .white
-        innerCircle.layer.cornerRadius = 30
-        innerCircle.isUserInteractionEnabled = false
-        shutterContainer.addSubview(innerCircle)
+        // Add guidance label inside container
+        guidanceLabel = UILabel()
+        guidanceLabel.translatesAutoresizingMaskIntoConstraints = false
+        guidanceLabel.text = "Position receipt within frame"
+        guidanceLabel.textColor = .white
+        guidanceLabel.textAlignment = .center
+        guidanceLabel.font = UIFont.systemFont(ofSize: 16, weight: .medium)
+        guidanceLabel.numberOfLines = 1
+        guidanceLabelContainer.addSubview(guidanceLabel)
         
         NSLayoutConstraint.activate([
-            shutterButton.centerXAnchor.constraint(equalTo: shutterContainer.centerXAnchor),
-            shutterButton.centerYAnchor.constraint(equalTo: shutterContainer.centerYAnchor),
-            shutterButton.widthAnchor.constraint(equalToConstant: 70),
-            shutterButton.heightAnchor.constraint(equalToConstant: 70),
+            receiptOverlayView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            receiptOverlayView.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -20),
+            receiptOverlayView.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.75),
+            receiptOverlayView.heightAnchor.constraint(equalTo: receiptOverlayView.widthAnchor, multiplier: 1.3),
             
-            innerCircle.centerXAnchor.constraint(equalTo: shutterContainer.centerXAnchor),
-            innerCircle.centerYAnchor.constraint(equalTo: shutterContainer.centerYAnchor),
-            innerCircle.widthAnchor.constraint(equalToConstant: 60),
-            innerCircle.heightAnchor.constraint(equalToConstant: 60)
+            guidanceLabelContainer.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            guidanceLabelContainer.topAnchor.constraint(equalTo: receiptOverlayView.bottomAnchor, constant: 40),
+            guidanceLabelContainer.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
+            guidanceLabelContainer.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20),
+            guidanceLabelContainer.heightAnchor.constraint(equalToConstant: 44),
+            
+            // Proper padding constraints for the label inside container
+            guidanceLabel.topAnchor.constraint(equalTo: guidanceLabelContainer.topAnchor, constant: 12),
+            guidanceLabel.leadingAnchor.constraint(equalTo: guidanceLabelContainer.leadingAnchor, constant: 16),
+            guidanceLabel.trailingAnchor.constraint(equalTo: guidanceLabelContainer.trailingAnchor, constant: -16),
+            guidanceLabel.bottomAnchor.constraint(equalTo: guidanceLabelContainer.bottomAnchor, constant: -12)
         ])
+    }
+    
+    private func updateOverlayMask() {
+        guard let maskView = maskView, let receiptOverlayView = receiptOverlayView else { return }
         
-        shutterButton.addTarget(self, action: #selector(capturePhoto), for: .touchUpInside)
+        // Update mask frame to match overlay view
+        maskView.frame = overlayView.bounds
         
+        // Remove existing mask layers
+        maskView.layer.sublayers?.removeAll()
         
-        // Setup cancel button
+        // Create new mask layer
+        let maskLayer = CAShapeLayer()
+        let bounds = overlayView.bounds
+        let path = UIBezierPath(rect: bounds)
+        
+        // Get the actual receipt frame from the receiptOverlayView
+        let receiptFrame = receiptOverlayView.frame
+        let receiptPath = UIBezierPath(roundedRect: receiptFrame, cornerRadius: 12)
+        path.append(receiptPath.reversing())
+        
+        maskLayer.path = path.cgPath
+        maskLayer.fillRule = .evenOdd
+        
+        maskView.layer.addSublayer(maskLayer)
+    }
+    
+    private func createCornerIndicators() {
+        let cornerLength: CGFloat = 20
+        let cornerWidth: CGFloat = 3
+        
+        for i in 0..<4 {
+            let cornerView = UIView()
+            cornerView.translatesAutoresizingMaskIntoConstraints = false
+            cornerView.backgroundColor = .clear
+            receiptOverlayView.addSubview(cornerView)
+            cornerViews.append(cornerView)
+            
+            let horizontalLine = UIView()
+            horizontalLine.backgroundColor = .white
+            horizontalLine.translatesAutoresizingMaskIntoConstraints = false
+            cornerView.addSubview(horizontalLine)
+            
+            let verticalLine = UIView()
+            verticalLine.backgroundColor = .white
+            verticalLine.translatesAutoresizingMaskIntoConstraints = false
+            cornerView.addSubview(verticalLine)
+            
+            switch i {
+            case 0: // Top-left
+                NSLayoutConstraint.activate([
+                    cornerView.topAnchor.constraint(equalTo: receiptOverlayView.topAnchor),
+                    cornerView.leadingAnchor.constraint(equalTo: receiptOverlayView.leadingAnchor),
+                    cornerView.widthAnchor.constraint(equalToConstant: cornerLength),
+                    cornerView.heightAnchor.constraint(equalToConstant: cornerLength),
+                    
+                    horizontalLine.topAnchor.constraint(equalTo: cornerView.topAnchor),
+                    horizontalLine.leadingAnchor.constraint(equalTo: cornerView.leadingAnchor),
+                    horizontalLine.widthAnchor.constraint(equalToConstant: cornerLength),
+                    horizontalLine.heightAnchor.constraint(equalToConstant: cornerWidth),
+                    
+                    verticalLine.topAnchor.constraint(equalTo: cornerView.topAnchor),
+                    verticalLine.leadingAnchor.constraint(equalTo: cornerView.leadingAnchor),
+                    verticalLine.widthAnchor.constraint(equalToConstant: cornerWidth),
+                    verticalLine.heightAnchor.constraint(equalToConstant: cornerLength)
+                ])
+            case 1: // Top-right
+                NSLayoutConstraint.activate([
+                    cornerView.topAnchor.constraint(equalTo: receiptOverlayView.topAnchor),
+                    cornerView.trailingAnchor.constraint(equalTo: receiptOverlayView.trailingAnchor),
+                    cornerView.widthAnchor.constraint(equalToConstant: cornerLength),
+                    cornerView.heightAnchor.constraint(equalToConstant: cornerLength),
+                    
+                    horizontalLine.topAnchor.constraint(equalTo: cornerView.topAnchor),
+                    horizontalLine.trailingAnchor.constraint(equalTo: cornerView.trailingAnchor),
+                    horizontalLine.widthAnchor.constraint(equalToConstant: cornerLength),
+                    horizontalLine.heightAnchor.constraint(equalToConstant: cornerWidth),
+                    
+                    verticalLine.topAnchor.constraint(equalTo: cornerView.topAnchor),
+                    verticalLine.trailingAnchor.constraint(equalTo: cornerView.trailingAnchor),
+                    verticalLine.widthAnchor.constraint(equalToConstant: cornerWidth),
+                    verticalLine.heightAnchor.constraint(equalToConstant: cornerLength)
+                ])
+            case 2: // Bottom-left
+                NSLayoutConstraint.activate([
+                    cornerView.bottomAnchor.constraint(equalTo: receiptOverlayView.bottomAnchor),
+                    cornerView.leadingAnchor.constraint(equalTo: receiptOverlayView.leadingAnchor),
+                    cornerView.widthAnchor.constraint(equalToConstant: cornerLength),
+                    cornerView.heightAnchor.constraint(equalToConstant: cornerLength),
+                    
+                    horizontalLine.bottomAnchor.constraint(equalTo: cornerView.bottomAnchor),
+                    horizontalLine.leadingAnchor.constraint(equalTo: cornerView.leadingAnchor),
+                    horizontalLine.widthAnchor.constraint(equalToConstant: cornerLength),
+                    horizontalLine.heightAnchor.constraint(equalToConstant: cornerWidth),
+                    
+                    verticalLine.bottomAnchor.constraint(equalTo: cornerView.bottomAnchor),
+                    verticalLine.leadingAnchor.constraint(equalTo: cornerView.leadingAnchor),
+                    verticalLine.widthAnchor.constraint(equalToConstant: cornerWidth),
+                    verticalLine.heightAnchor.constraint(equalToConstant: cornerLength)
+                ])
+            case 3: // Bottom-right
+                NSLayoutConstraint.activate([
+                    cornerView.bottomAnchor.constraint(equalTo: receiptOverlayView.bottomAnchor),
+                    cornerView.trailingAnchor.constraint(equalTo: receiptOverlayView.trailingAnchor),
+                    cornerView.widthAnchor.constraint(equalToConstant: cornerLength),
+                    cornerView.heightAnchor.constraint(equalToConstant: cornerLength),
+                    
+                    horizontalLine.bottomAnchor.constraint(equalTo: cornerView.bottomAnchor),
+                    horizontalLine.trailingAnchor.constraint(equalTo: cornerView.trailingAnchor),
+                    horizontalLine.widthAnchor.constraint(equalToConstant: cornerLength),
+                    horizontalLine.heightAnchor.constraint(equalToConstant: cornerWidth),
+                    
+                    verticalLine.bottomAnchor.constraint(equalTo: cornerView.bottomAnchor),
+                    verticalLine.trailingAnchor.constraint(equalTo: cornerView.trailingAnchor),
+                    verticalLine.widthAnchor.constraint(equalToConstant: cornerWidth),
+                    verticalLine.heightAnchor.constraint(equalToConstant: cornerLength)
+                ])
+            default:
+                break
+            }
+        }
+    }
+    
+    private func setupTopControls() {
+        // Create background blur for top controls
+        let blurEffect = UIBlurEffect(style: .systemUltraThinMaterialDark)
+        let blurView = UIVisualEffectView(effect: blurEffect)
+        blurView.translatesAutoresizingMaskIntoConstraints = false
+        blurView.layer.cornerRadius = 20
+        blurView.clipsToBounds = true
+        view.addSubview(blurView)
+        
+        topControlsStackView = UIStackView()
+        topControlsStackView.translatesAutoresizingMaskIntoConstraints = false
+        topControlsStackView.axis = .horizontal
+        topControlsStackView.distribution = .fillEqually
+        topControlsStackView.spacing = 12
+        blurView.contentView.addSubview(topControlsStackView)
+        
+        // Flash button
+        flashButton = createControlButton(imageName: "bolt.slash.fill", action: #selector(toggleFlash))
+        
+        // Torch button
+        torchButton = createControlButton(imageName: "flashlight.off.fill", action: #selector(toggleTorch))
+        
+        topControlsStackView.addArrangedSubview(flashButton)
+        topControlsStackView.addArrangedSubview(torchButton)
+        
+        NSLayoutConstraint.activate([
+            blurView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
+            blurView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            blurView.widthAnchor.constraint(equalToConstant: 96),
+            blurView.heightAnchor.constraint(equalToConstant: 44),
+            
+            topControlsStackView.topAnchor.constraint(equalTo: blurView.contentView.topAnchor, constant: 8),
+            topControlsStackView.leadingAnchor.constraint(equalTo: blurView.contentView.leadingAnchor, constant: 12),
+            topControlsStackView.trailingAnchor.constraint(equalTo: blurView.contentView.trailingAnchor, constant: -12),
+            topControlsStackView.bottomAnchor.constraint(equalTo: blurView.contentView.bottomAnchor, constant: -8)
+        ])
+    }
+    
+    private func setupBottomControls() {
+        bottomControlsView = UIView()
+        bottomControlsView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bottomControlsView)
+        
+        // Setup shutter button with modern design
+               let deepBlueColor = UIColor(red: 78/255, green: 87/255, blue: 255/255, alpha: 1.0)
+               shutterButton = UIButton(type: .custom)
+               shutterButton.translatesAutoresizingMaskIntoConstraints = false
+               shutterButton.backgroundColor = .white
+               shutterButton.layer.cornerRadius = 35
+               shutterButton.layer.borderWidth = 4
+               shutterButton.layer.borderColor = deepBlueColor.cgColor
+               shutterButton.addTarget(self, action: #selector(capturePhoto), for: .touchUpInside)
+               bottomControlsView.addSubview(shutterButton)
+        
+        // Cancel button with modern styling
         cancelButton = UIButton(type: .system)
         cancelButton.translatesAutoresizingMaskIntoConstraints = false
         cancelButton.setTitle("Cancel", for: .normal)
         cancelButton.setTitleColor(.white, for: .normal)
         cancelButton.titleLabel?.font = UIFont.systemFont(ofSize: 17, weight: .semibold)
-        cancelButton.backgroundColor = UIColor.black.withAlphaComponent(0.5)
-        cancelButton.layer.cornerRadius = 20
+        cancelButton.backgroundColor = UIColor.black.withAlphaComponent(0.3)
+        cancelButton.layer.cornerRadius = 22
+        cancelButton.layer.borderWidth = 1
+        cancelButton.layer.borderColor = UIColor.white.withAlphaComponent(0.3).cgColor
         cancelButton.addTarget(self, action: #selector(cancel), for: .touchUpInside)
-        view.addSubview(cancelButton)
+        bottomControlsView.addSubview(cancelButton)
+    }
+    
+    private func setupCaptureIndicator() {
+        captureIndicator = UIView()
+        captureIndicator.translatesAutoresizingMaskIntoConstraints = false
+        captureIndicator.backgroundColor = .white
+        captureIndicator.alpha = 0
+        captureIndicator.isUserInteractionEnabled = false
+        view.addSubview(captureIndicator)
         
-        // Setup flash button
-        flashButton = UIButton(type: .system)
-        flashButton.translatesAutoresizingMaskIntoConstraints = false
-        flashButton.setImage(UIImage(systemName: "bolt.slash.fill"), for: .normal)
-        flashButton.tintColor = .white
-        flashButton.backgroundColor = UIColor.black.withAlphaComponent(0.5)
-        flashButton.layer.cornerRadius = 20
-        flashButton.addTarget(self, action: #selector(toggleFlash), for: .touchUpInside)
-        view.addSubview(flashButton)
-        
-        // Add constraints
         NSLayoutConstraint.activate([
-            // Receipt overlay - centered with appropriate size
-            receiptOverlayView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            receiptOverlayView.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -50),
-            receiptOverlayView.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.8),
-            receiptOverlayView.heightAnchor.constraint(equalTo: receiptOverlayView.widthAnchor, multiplier: 1.4),
-            
-            // Guide label
-            guideLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            guideLabel.topAnchor.constraint(equalTo: receiptOverlayView.bottomAnchor, constant: 16),
-            
-            // Shutter container
-            shutterContainer.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            shutterContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -30),
-            shutterContainer.widthAnchor.constraint(equalToConstant: 80),
-            shutterContainer.heightAnchor.constraint(equalToConstant: 80),
-            
-            // Cancel button
-            cancelButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            cancelButton.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
-            cancelButton.widthAnchor.constraint(equalToConstant: 100),
-            cancelButton.heightAnchor.constraint(equalToConstant: 40),
-            
-            // Flash button
-            flashButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
-            flashButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
-            flashButton.widthAnchor.constraint(equalToConstant: 40),
-            flashButton.heightAnchor.constraint(equalToConstant: 40)
+            captureIndicator.topAnchor.constraint(equalTo: view.topAnchor),
+            captureIndicator.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            captureIndicator.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            captureIndicator.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
     }
     
-    private func getBluePurpleColor() -> UIColor {
-        // Create the bluePurple color to match your theme
-        return UIColor(red: 0.4, green: 0.3, blue: 0.8, alpha: 1.0)
+    private func layoutConstraints() {
+        NSLayoutConstraint.activate([
+            bottomControlsView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bottomControlsView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bottomControlsView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+            bottomControlsView.heightAnchor.constraint(equalToConstant: 120),
+            
+            shutterButton.centerXAnchor.constraint(equalTo: bottomControlsView.centerXAnchor),
+            shutterButton.topAnchor.constraint(equalTo: bottomControlsView.topAnchor, constant: 20),
+            shutterButton.widthAnchor.constraint(equalToConstant: 70),
+            shutterButton.heightAnchor.constraint(equalToConstant: 70),
+            
+            cancelButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 30),
+            cancelButton.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
+            cancelButton.widthAnchor.constraint(equalToConstant: 100),
+            cancelButton.heightAnchor.constraint(equalToConstant: 44)
+        ])
+    }
+    
+    private func createControlButton(imageName: String, action: Selector) -> UIButton {
+        let button = UIButton(type: .system)
+        button.setImage(UIImage(systemName: imageName), for: .normal)
+        button.tintColor = .white
+        button.addTarget(self, action: action, for: .touchUpInside)
+        return button
+    }
+    
+    private func setupGestures() {
+        // Add tap to focus gesture
+        let tapGesture = UITapGestureRecognizer(target: self, action: #selector(focusAndExposeTap(_:)))
+        view.addGestureRecognizer(tapGesture)
+    }
+    
+    private func animateGuidanceAppearance() {
+        UIView.animate(withDuration: 0.5, delay: 0.5, options: .curveEaseOut) {
+            self.guidanceLabelContainer.alpha = 1
+        } completion: { _ in
+            UIView.animate(withDuration: 0.3, delay: 2.0, options: .curveEaseIn) {
+                self.guidanceLabelContainer.alpha = 0
+            }
+        }
+    }
+    
+    @objc private func focusAndExposeTap(_ gestureRecognizer: UITapGestureRecognizer) {
+        let devicePoint = previewLayer?.captureDevicePointConverted(fromLayerPoint: gestureRecognizer.location(in: view))
+        focus(with: .autoFocus, exposureMode: .autoExpose, at: devicePoint, monitorSubjectAreaChange: true)
+    }
+    
+    private func focus(with focusMode: AVCaptureDevice.FocusMode,
+                      exposureMode: AVCaptureDevice.ExposureMode,
+                      at devicePoint: CGPoint?,
+                      monitorSubjectAreaChange: Bool) {
+        
+        guard let device = AVCaptureDevice.default(for: .video) else { return }
+        
+        do {
+            try device.lockForConfiguration()
+            
+            if device.isFocusPointOfInterestSupported && device.isFocusModeSupported(focusMode) {
+                device.focusPointOfInterest = devicePoint ?? CGPoint(x: 0.5, y: 0.5)
+                device.focusMode = focusMode
+            }
+            
+            if device.isExposurePointOfInterestSupported && device.isExposureModeSupported(exposureMode) {
+                device.exposurePointOfInterest = devicePoint ?? CGPoint(x: 0.5, y: 0.5)
+                device.exposureMode = exposureMode
+            }
+            
+            device.isSubjectAreaChangeMonitoringEnabled = monitorSubjectAreaChange
+            device.unlockForConfiguration()
+        } catch {
+            print("Could not lock device for configuration: \(error)")
+        }
     }
     
     private func startCaptureSession() {
@@ -1539,47 +1663,39 @@ class CustomCameraViewController: UIViewController {
     }
     
     @objc private func capturePhoto() {
-        print("Shutter button tapped - capturing photo")
-        
-        guard let photoOutput = photoOutput else {
-            print("Error: photoOutput is nil")
-            return
-        }
+        guard let photoOutput = photoOutput else { return }
         
         let settings = AVCapturePhotoSettings()
         
-        // Add capture feedback
+        // Add haptic feedback
         let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
         feedbackGenerator.prepare()
         feedbackGenerator.impactOccurred()
         
-        // Visual feedback - animate the shutter
-        UIView.animate(withDuration: 0.1, animations: {
-            self.shutterButton.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
-        }) { _ in
-            UIView.animate(withDuration: 0.1) {
-                self.shutterButton.transform = CGAffineTransform.identity
-            }
-        }
+        // Flash effect
+        showCaptureEffect()
         
         // Configure flash
-        if let device = AVCaptureDevice.default(for: .video),
-           device.hasTorch {
-            do {
-                try device.lockForConfiguration()
-                if isFlashEnabled {
-                    settings.flashMode = .on
-                } else {
-                    settings.flashMode = .off
-                }
-                device.unlockForConfiguration()
-            } catch {
-                print("Error configuring device: \(error.localizedDescription)")
+        if let device = AVCaptureDevice.default(for: .video) {
+            if isFlashEnabled && device.hasFlash {
+                settings.flashMode = .on
+            } else {
+                settings.flashMode = .off
             }
         }
         
-        // Capture the photo
+        settings.isHighResolutionPhotoEnabled = true
         photoOutput.capturePhoto(with: settings, delegate: self)
+    }
+    
+    private func showCaptureEffect() {
+        UIView.animate(withDuration: 0.1) {
+            self.captureIndicator.alpha = 0.8
+        } completion: { _ in
+            UIView.animate(withDuration: 0.1) {
+                self.captureIndicator.alpha = 0
+            }
+        }
     }
     
     @objc private func cancel() {
@@ -1588,11 +1704,37 @@ class CustomCameraViewController: UIViewController {
     
     @objc private func toggleFlash() {
         isFlashEnabled.toggle()
+        updateFlashButton()
+    }
+    
+    @objc private func toggleTorch() {
+        isTorchEnabled.toggle()
+        updateTorchButton()
+        setTorchMode(isTorchEnabled)
+    }
+    
+    private func updateFlashButton() {
+        let imageName = isFlashEnabled ? "bolt.fill" : "bolt.slash.fill"
+        flashButton.setImage(UIImage(systemName: imageName), for: .normal)
+        flashButton.tintColor = isFlashEnabled ? .systemYellow : .white
+    }
+    
+    private func updateTorchButton() {
+        let imageName = isTorchEnabled ? "flashlight.on.fill" : "flashlight.off.fill"
+        torchButton.setImage(UIImage(systemName: imageName), for: .normal)
+        torchButton.tintColor = isTorchEnabled ? .systemYellow : .white
+    }
+    
+    private func setTorchMode(_ isOn: Bool) {
+        guard let device = AVCaptureDevice.default(for: .video),
+              device.hasTorch else { return }
         
-        if isFlashEnabled {
-            flashButton.setImage(UIImage(systemName: "bolt.fill"), for: .normal)
-        } else {
-            flashButton.setImage(UIImage(systemName: "bolt.slash.fill"), for: .normal)
+        do {
+            try device.lockForConfiguration()
+            device.torchMode = isOn ? .on : .off
+            device.unlockForConfiguration()
+        } catch {
+            print("Torch could not be used: \(error)")
         }
     }
     
@@ -1603,36 +1745,25 @@ class CustomCameraViewController: UIViewController {
     }
 }
 
-// AVCapturePhotoCaptureDelegate implementation
+// MARK: - AVCapturePhotoCaptureDelegate
 extension CustomCameraViewController: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        print("Photo capture completed")
-        
         if let error = error {
             print("Error capturing photo: \(error.localizedDescription)")
             return
         }
         
-        guard let imageData = photo.fileDataRepresentation() else {
-            print("Error: Couldn't get image data representation")
-            return
-        }
-        
-        guard let image = UIImage(data: imageData) else {
+        guard let imageData = photo.fileDataRepresentation(),
+              let image = UIImage(data: imageData) else {
             print("Error: Couldn't create UIImage from data")
             return
         }
         
-        print("Successfully created image, notifying delegate")
-        
-        // Ensure delegate method is called on main thread
         DispatchQueue.main.async {
             self.delegate?.didCaptureImage(image)
         }
     }
 }
-
-// Extension to add padding to UILabel
 extension UILabel {
     private struct AssociatedKeys {
         static var padding = UIEdgeInsets()

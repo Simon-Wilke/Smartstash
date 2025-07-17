@@ -252,18 +252,36 @@ struct AllTransactionsView: View {
                 // Enhanced search bar with suggestions
                 enhancedSearchBar
                 
-                // Transaction count display
-                if !filteredTransactions.isEmpty {
-                    HStack {
-                        Text("\(filteredTransactions.count) transaction\(filteredTransactions.count == 1 ? "" : "s") found")
-                            .font(.custom("Roboto-Regular", size: 12))
-                            .foregroundColor(Color.gray.opacity(0.7))
-                            .padding(.horizontal)
-                            .padding(.top, 4)
-                            .padding(.bottom, 2)
-                        Spacer()
-                    }
-                }
+                // Compact, elegant transaction count display
+                             if !filteredTransactions.isEmpty {
+                                 HStack(spacing: 6) {
+                                     // Small dot indicator
+                                     Circle()
+                                         .fill(bluePurpleColor)
+                                         .frame(width: 6, height: 6)
+                                     
+                                     // Transaction count
+                                     Text("\(filteredTransactions.count) Transaction\(filteredTransactions.count == 1 ? "" : "s")")
+                                         .font(.custom("Roboto-Regular", size: 13))
+                                         .foregroundColor(colorScheme == .dark ? Color.gray.opacity(0.8) : Color.gray)
+                                         
+                                     // Optional filter indicator
+                                     if selectedFilter != .all || selectedDate != nil || isCustomSorting || !searchText.isEmpty {
+                                         Text("•")
+                                             .foregroundColor(Color.gray.opacity(0.6))
+                                             .font(.system(size: 13))
+                                         
+                                         Text("Filtered")
+                                             .font(.custom("Roboto-Regular", size: 13))
+                                             .foregroundColor(bluePurpleColor.opacity(0.8))
+                                     }
+                                     
+                                     Spacer()
+                                 }
+                                 .padding(.horizontal, 16)
+                                 .padding(.top, 12)
+                                 .padding(.bottom, 8)
+                             }
                 
                 // Main content
                 ZStack {
@@ -387,103 +405,108 @@ struct AllTransactionsView: View {
     }
     
     private var enhancedSearchBar: some View {
-            VStack(spacing: 0) {
-                HStack {
-                    HStack(spacing: 10) {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundColor(.gray)
-                            .font(.system(size: 14))
-                            .padding(.leading, 4)
-                        
-                        TextField("Search by category or notes", text: $searchText)
-                            .textFieldStyle(PlainTextFieldStyle())
-                            .focused($isSearchFocused)
-                            .padding(.vertical, 6)
-                            .autocorrectionDisabled(true)
-                        
-                        if !searchText.isEmpty {
-                            Button(action: {
-                                searchText = ""
-                                showSuggestions = false
-                                let generator = UIImpactFeedbackGenerator(style: .light)
-                                generator.impactOccurred()
-                            }) {
-                                ZStack {
-                                    Circle()
-                                        .fill(Color.gray.opacity(0.15))
-                                        .frame(width: 20, height: 20)
-                                        .padding(.trailing, 4)
-                                    
-                                    Image(systemName: "xmark")
-                                        .font(.system(size: 10, weight: .bold))
-                                        .foregroundColor(.gray)
-                                        .padding(.trailing, 4)
-                                }
+        VStack(spacing: 0) {
+            HStack {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(colorScheme == .dark ? .gray.opacity(0.7) : .gray)
+                        .font(.system(size: 13))
+                        .padding(.leading, 2)
+
+                    TextField("Search by category or notes", text: $searchText)
+                        .textFieldStyle(PlainTextFieldStyle())
+                        .focused($isSearchFocused)
+                        .padding(.vertical, 4)
+                        .foregroundColor(colorScheme == .dark ? .white : .primary)
+                        .autocorrectionDisabled(true)
+
+                    if !searchText.isEmpty {
+                        Button(action: {
+                            searchText = ""
+                            showSuggestions = false
+                            let generator = UIImpactFeedbackGenerator(style: .soft)
+                            generator.impactOccurred()
+                        }) {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.gray.opacity(colorScheme == .dark ? 0.25 : 0.15))
+                                    .frame(width: 18, height: 18)
+                                    .padding(.trailing, 2)
+
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundColor(.gray)
+                                    .padding(.trailing, 2)
                             }
-                            .transition(.scale.combined(with: .opacity))
-                            .buttonStyle(PlainButtonStyle())
                         }
+                        .transition(.scale.combined(with: .opacity))
+                        .buttonStyle(PlainButtonStyle())
                     }
-                    .padding(6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(colorScheme == .dark ? Color.black.opacity(0.3) : Color(UIColor.secondarySystemBackground))
-                    )
                 }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
+                .padding(6)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(colorScheme == .dark ? Color.white.opacity(0.07) : Color(UIColor.secondarySystemBackground))
+                )
             }
+            .padding(.horizontal)
+            .padding(.vertical, 6)
         }
+    }
     
     // Enhanced search suggestions overlay
-        private var searchSuggestionsOverlay: some View {
-            VStack(spacing: 0) {
-                Spacer().frame(height: 0)
-                
-                VStack(alignment: .leading, spacing: 0) {
-                    // Display search suggestions
-                    ForEach(searchSuggestions.prefix(4), id: \.self) { suggestion in
-                        suggestionRow(suggestion, isRecent: false)
+    private var searchSuggestionsOverlay: some View {
+        VStack(spacing: 0) {
+            Spacer().frame(height: 0)
+
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(searchSuggestions.prefix(4), id: \.self) { suggestion in
+                    suggestionRow(suggestion, isRecent: false)
+                    
+                    if suggestion != searchSuggestions.prefix(4).last {
+                        Divider()
+                            .background(Color.gray.opacity(colorScheme == .dark ? 0.3 : 0.1))
+                            .padding(.leading, 44) // aligns with text
                     }
                 }
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(colorScheme == .dark ? Color(UIColor.systemBackground) : Color.white)
-                        .shadow(color: Color.black.opacity(0.15), radius: 8, x: 0, y: 5)
-                )
-                .padding(.horizontal, 16)
-                .frame(maxWidth: .infinity, alignment: .center)
-                
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(colorScheme == .dark ? Color(UIColor.secondarySystemBackground) : Color(UIColor.systemBackground))
+            )
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            Spacer()
+        }
+    }
+
+    // Enhanced suggestion row with improved styling
+    private func suggestionRow(_ suggestion: String, isRecent: Bool) -> some View {
+        Button(action: {
+            searchText = suggestion
+            addToRecentSearches(suggestion)
+            showSuggestions = false
+            isSearchFocused = false
+        }) {
+            HStack(spacing: 12) {
+                Image(systemName: isRecent ? "clock" : "magnifyingglass")
+                    .font(.system(size: 14))
+                    .foregroundColor(.gray)
+                    .frame(width: 24)
+
+                Text(suggestion)
+                    .font(.system(size: 15))
+                    .foregroundColor(colorScheme == .dark ? .white : .primary)
+
                 Spacer()
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle()) // increases tappable area
         }
-        
-        // Enhanced suggestion row with improved styling
-        private func suggestionRow(_ suggestion: String, isRecent: Bool) -> some View {
-            Button(action: {
-                searchText = suggestion
-                addToRecentSearches(suggestion)
-                showSuggestions = false
-                isSearchFocused = false
-            }) {
-                HStack {
-                    Image(systemName: isRecent ? "clock" : "magnifyingglass")
-                        .font(.system(size: 14))
-                        .foregroundColor(.gray)
-                        .frame(width: 24)
-                    
-                    Text(suggestion)
-                        .font(.system(size: 15))
-                        .foregroundColor(colorScheme == .dark ? .white : .black)
-                    
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-            }
-            .background(Color.clear)
-        }
-        
+        .buttonStyle(PlainButtonStyle())
+    }
     
     // Updated LoadingView component
     @ViewBuilder

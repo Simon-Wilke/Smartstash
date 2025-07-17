@@ -8,587 +8,6 @@
 import SwiftUI
 import Charts
 
-struct Transaction: Identifiable, Codable, Hashable {
-    let id: UUID
-    var amount: Double
-    var category: String
-    var type: TransactionType
-    var date: Date 
-    var recurrence: RecurrenceType
-    var notes: String?
-    var icon: String
-
-
-    enum TransactionType: String, Codable, CaseIterable {
-        case income
-        case expense
-        case investment
-        case savings
-    }
-    
-    enum RecurrenceType: String, Codable, CaseIterable {
-        case oneTime
-        case daily
-        case weekly
-        case biWeekly
-        case monthly
-        case quarterly
-        case annually
-    }
-    
-    init(
-           amount: Double,
-           category: String,
-           type: TransactionType,
-           recurrence: RecurrenceType = .oneTime,
-           notes: String? = nil,
-           icon: String,
-           date: Date = Date()  // ✅ Now allows setting a custom date (default is `Date()`)
-       ) {
-           self.id = UUID()
-           self.amount = amount
-           self.category = category
-           self.type = type
-           self.recurrence = recurrence
-           self.notes = notes
-           self.icon = icon
-           self.date = date  // ✅ Now uses the provided date instead of always `Date()`
-       }
-   }
-
-class BudgetViewModel: ObservableObject {
-    @Published var transactions: [Transaction] = []
-    @Published var pendingTransactions: [Transaction] = []
-    @Published var budgetGoals: [BudgetGoal] = []
-    
-    // MARK: - Recurring Transaction Configuration
-    
-    struct RecurrenceConfig {
-        let visibilityWindow: TimeInterval
-        let preNotificationWindow: TimeInterval
-        
-        static func forType(_ type: Transaction.RecurrenceType) -> RecurrenceConfig {
-            switch type {
-            case .daily:
-                return RecurrenceConfig(
-                    visibilityWindow: 7 * 24 * 3600,  // 7 days ahead
-                    preNotificationWindow: 24 * 3600   // 1 day before
-                )
-            case .weekly:
-                return RecurrenceConfig(
-                    visibilityWindow: 2 * 7 * 24 * 3600,  // 2 weeks ahead
-                    preNotificationWindow: 3 * 24 * 3600   // 3 days before
-                )
-            case .biWeekly:
-                return RecurrenceConfig(
-                    visibilityWindow: 4 * 7 * 24 * 3600,  // 4 weeks ahead
-                    preNotificationWindow: 3 * 24 * 3600   // 3 days before
-                )
-            case .monthly:
-                return RecurrenceConfig(
-                    visibilityWindow: 31 * 24 * 3600,     // ~1 month ahead
-                    preNotificationWindow: 7 * 24 * 3600   // 1 week before
-                )
-            case .quarterly:
-                return RecurrenceConfig(
-                    visibilityWindow: 93 * 24 * 3600,     // ~3 months ahead
-                    preNotificationWindow: 7 * 24 * 3600   // 1 week before
-                )
-            case .annually:
-                return RecurrenceConfig(
-                    visibilityWindow: 31 * 24 * 3600,     // Show 1 month ahead
-                    preNotificationWindow: 7 * 24 * 3600   // 1 week before
-                )
-            case .oneTime:
-                return RecurrenceConfig(
-                    visibilityWindow: 365 * 24 * 3600,    // Show up to a year ahead
-                    preNotificationWindow: 0               // No pre-notification
-                )
-            }
-        }
-    }
-    
-    // MARK: - Computed Properties
-    
-    var allTransactions: [Transaction] {
-        // Combine actual and upcoming transactions, sorted by date
-        (transactions + pendingTransactions).sorted { $0.date < $1.date }
-    }
-    
-    var totalIncome: Double {
-        transactions.filter { $0.type == .income }.reduce(0) { $0 + $1.amount }
-    }
-    
-    var totalExpenses: Double {
-        transactions.filter { $0.type == .expense }.reduce(0) { $0 + $1.amount }
-    }
-    
-    var totalInvestments: Double {
-        transactions.filter { $0.type == .investment }.reduce(0) { $0 + $1.amount }
-    }
-    
-    var totalSavings: Double {
-        transactions.filter { $0.type == .savings }.reduce(0) { $0 + $1.amount }
-    }
-    
-    var balance: Double {
-        totalIncome - totalExpenses
-    }
-    
-    // MARK: - Transaction Management
-    
-    func addTransaction(_ transaction: Transaction) {
-        if transaction.recurrence == .oneTime {
-            if transaction.date <= Date() {
-                transactions.append(transaction)
-            } else {
-                pendingTransactions.append(transaction)
-            }
-        } else {
-            generateRecurringTransactions(from: transaction)
-        }
-        
-        saveTransactions()
-        savePendingTransactions()
-    }
-    
-    func deleteTransaction(_ transaction: Transaction) {
-        if let index = transactions.firstIndex(where: { $0.id == transaction.id }) {
-            transactions.remove(at: index)
-        }
-        if let index = pendingTransactions.firstIndex(where: { $0.id == transaction.id }) {
-            pendingTransactions.remove(at: index)
-        }
-        
-        saveTransactions()
-        savePendingTransactions()
-    }
-    
-    func updateTransaction(_ updatedTransaction: Transaction) {
-        // Update in transactions array
-        if let index = transactions.firstIndex(where: { $0.id == updatedTransaction.id }) {
-            transactions[index] = updatedTransaction
-        }
-        
-        // Update in pendingTransactions array
-        if let index = pendingTransactions.firstIndex(where: { $0.id == updatedTransaction.id }) {
-            pendingTransactions[index] = updatedTransaction
-        }
-        
-        saveTransactions()
-        savePendingTransactions()
-    }
-    
-    // MARK: - Recurring Transaction Handling
-    
-    func generateRecurringTransactions(from transaction: Transaction) {
-        // First, remove any existing pending transactions with the same pattern
-        // (same category, type, amount, recurrence, etc.)
-        pendingTransactions.removeAll { pendingTx in
-            pendingTx.category == transaction.category &&
-            pendingTx.type == transaction.type &&
-            pendingTx.amount == transaction.amount &&
-            pendingTx.recurrence == transaction.recurrence &&
-            pendingTx.date > Date() // Only remove future transactions
-        }
-        
-        let config = RecurrenceConfig.forType(transaction.recurrence)
-        let visibilityEndDate = Date().addingTimeInterval(config.visibilityWindow)
-        var currentDate = transaction.date
-        
-        // For existing transactions, find the most recent occurrence to start from
-        if transaction.recurrence != .oneTime {
-            let existingTransactions = transactions.filter {
-                $0.category == transaction.category &&
-                $0.type == transaction.type &&
-                $0.amount == transaction.amount &&
-                $0.recurrence == transaction.recurrence
-            }.sorted(by: { $0.date > $1.date })
-            
-            if let mostRecent = existingTransactions.first {
-                // Start from the next occurrence after the most recent one
-                currentDate = getNextDate(from: mostRecent.date, recurrence: transaction.recurrence)
-            }
-        }
-        
-        // Generate transactions until we reach the visibility window
-        while currentDate <= visibilityEndDate {
-            let recurringTransaction = Transaction(
-                amount: transaction.amount,
-                category: transaction.category,
-                type: transaction.type,
-                recurrence: transaction.recurrence,
-                notes: transaction.notes,
-                icon: transaction.icon,
-                date: currentDate
-            )
-            
-            if currentDate <= Date() {
-                transactions.append(recurringTransaction)
-            } else {
-                pendingTransactions.append(recurringTransaction)
-            }
-            
-            currentDate = getNextDate(from: currentDate, recurrence: transaction.recurrence)
-        }
-        
-        saveTransactions()
-        savePendingTransactions()
-    }
-    
-    func getNextDate(from date: Date, recurrence: Transaction.RecurrenceType) -> Date {
-        let calendar = Calendar.current
-        
-        switch recurrence {
-        case .daily:
-            return calendar.date(byAdding: .day, value: 1, to: date) ?? date
-        case .weekly:
-            return calendar.date(byAdding: .weekOfYear, value: 1, to: date) ?? date
-        case .biWeekly:
-            return calendar.date(byAdding: .weekOfYear, value: 2, to: date) ?? date
-        case .monthly:
-            return calendar.date(byAdding: .month, value: 1, to: date) ?? date
-        case .quarterly:
-            return calendar.date(byAdding: .month, value: 3, to: date) ?? date
-        case .annually:
-            return calendar.date(byAdding: .year, value: 1, to: date) ?? date
-        case .oneTime:
-            return date
-        }
-    }
-    
-    func refreshPendingTransactions() {
-        let now = Date()
-        
-        // Remove old pending transactions
-        pendingTransactions.removeAll { transaction in
-            return transaction.date < now
-        }
-        
-        // Regenerate future transactions for all recurring transactions
-        // But first, group recurring transactions to avoid duplicates
-        let recurringTransactionGroups = Dictionary(
-            grouping: transactions.filter { $0.recurrence != .oneTime },
-            by: { "\($0.category)-\($0.type)-\($0.amount)-\($0.recurrence)" }
-        )
-        
-        // For each unique recurring transaction pattern, generate future occurrences
-        for (_, transactions) in recurringTransactionGroups {
-            if let representative = transactions.sorted(by: { $0.date > $1.date }).first {
-                generateRecurringTransactions(from: representative)
-            }
-        }
-        
-        savePendingTransactions()
-    }
-    
-    func processTransactions() {
-        let now = Date()
-        let processedTransactions = pendingTransactions.filter { $0.date <= now }
-        
-        transactions.append(contentsOf: processedTransactions)
-        pendingTransactions.removeAll { $0.date <= now }
-        
-        saveTransactions()
-        savePendingTransactions()
-    }
-    
-    // MARK: - Category Analysis
-    
-    func totalForCategory(_ category: String, type: Transaction.TransactionType) -> Double {
-        transactions
-            .filter { $0.category == category && $0.type == type }
-            .reduce(0) { $0 + $1.amount }
-    }
-    
-    func transactionsByCategory(type: Transaction.TransactionType) -> [String: Double] {
-        Dictionary(
-            grouping: transactions.filter { $0.type == type },
-            by: { $0.category }
-        ).mapValues {
-            $0.reduce(0) { $0 + $1.amount }
-        }
-    }
-    
-    // MARK: - Persistence
-    
-    func saveTransactions() {
-        do {
-            let encoder = JSONEncoder()
-            let data = try encoder.encode(transactions)
-            UserDefaults.standard.set(data, forKey: "transactions")
-        } catch {
-            print("Failed to save transactions: \(error)")
-        }
-    }
-    
-    func loadTransactions() {
-        if let data = UserDefaults.standard.data(forKey: "transactions") {
-            do {
-                let decoder = JSONDecoder()
-                transactions = try decoder.decode([Transaction].self, from: data)
-            } catch {
-                print("Failed to load transactions: \(error)")
-            }
-        }
-    }
-    
-    func savePendingTransactions() {
-        do {
-            let encoder = JSONEncoder()
-            let data = try encoder.encode(pendingTransactions)
-            UserDefaults.standard.set(data, forKey: "pendingTransactions")
-        } catch {
-            print("Failed to save pending transactions: \(error)")
-        }
-    }
-    
-    func loadPendingTransactions() {
-        if let data = UserDefaults.standard.data(forKey: "pendingTransactions") {
-            do {
-                let decoder = JSONDecoder()
-                pendingTransactions = try decoder.decode([Transaction].self, from: data)
-            } catch {
-                print("Failed to load pending transactions: \(error)")
-            }
-        }
-    }
-    
-    // MARK: - Initialization
-    
-    init() {
-        loadTransactions()
-        loadPendingTransactions()
-        
-        // Process transactions on launch
-        processTransactions()
-        
-        // Set up timers for transaction processing and recurring transaction refresh
-        Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            self?.processTransactions()
-        }
-        
-        Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            self?.refreshPendingTransactions()
-        }
-    }
-}
-// Budget Goal Structure
-struct BudgetGoal: Identifiable, Codable {
-    let id: UUID
-    var name: String
-    var targetAmount: Double
-    var currentAmount: Double
-    var category: Transaction.TransactionType
-    
-    var progressPercentage: Double {
-        (currentAmount / targetAmount) * 100
-    }
-}
-struct TransactionEditSheet: View {
-    @State var transaction: Transaction
-    @ObservedObject var viewModel: BudgetViewModel
-    @Environment(\.dismiss) var dismiss
-    @Environment(\.colorScheme) var colorScheme
-    let hapticFeedback = UIImpactFeedbackGenerator(style: .light)
-    
-    @State private var showingRecurrenceAlert = false
-    @State private var recurrenceCancellationType: RecurrenceCancellationType = .thisAndFuture
-    
-    enum RecurrenceCancellationType {
-        case thisOnly
-        case thisAndFuture
-    }
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Button(action: { dismiss() }) {
-                    ZStack {
-                        Circle()
-                            .fill(colorScheme == .dark ? Color.white.opacity(0.2) : Color.gray.opacity(0.2))
-                            .frame(width: 28, height: 28)
-                        
-                        Image(systemName: "xmark")
-                            .foregroundColor(colorScheme == .dark ? .white : .primary)
-                            .font(.system(size: 12, weight: .bold))
-                    }
-                    .padding(8)
-                }
-                
-                Spacer()
-                
-                Text("Edit Transaction")
-                    .font(.headline)
-                    .fontWeight(.bold)
-                
-                Spacer()
-                
-                Button(action: {
-                    updateTransaction()
-                    hapticFeedback.impactOccurred()
-                    dismiss()
-                }) {
-                    Text("Save")
-                        .fontWeight(.bold)
-                        .foregroundColor(transaction.category.isEmpty || transaction.amount <= 0 ? .gray : bluePurpleColor)
-                }
-                .disabled(transaction.category.isEmpty || transaction.amount <= 0)
-                .padding()
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 10)
-            .background(Color(.systemGray6))
-            
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    // Category Input
-                    CategoryInputView(category: $transaction.category, selectedIcon: .constant("💵"))
-                    
-                    // Amount Input
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Amount")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        TextField("Enter amount", value: $transaction.amount, formatter: NumberFormatter())
-                            .keyboardType(.decimalPad)
-                            .padding()
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(10)
-                    }
-                    
-                    // Notes Input
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Notes (Optional)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        TextField("Enter notes (e.g., Payment details, Location)", text: Binding(
-                            get: { transaction.notes ?? "" },
-                            set: { transaction.notes = $0 }
-                        ))
-                        .padding()
-                        .background(Color.gray.opacity(0.1))
-                        .cornerRadius(10)
-                    }
-                    
-                    // Transaction Type
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Transaction Type")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        Menu {
-                            ForEach(Transaction.TransactionType.allCases, id: \.self) { type in
-                                Button(type.rawValue.capitalized) {
-                                    hapticFeedback.impactOccurred()
-                                    transaction.type = type
-                                }
-                            }
-                        } label: {
-                            HStack {
-                                Text(transaction.type.rawValue.capitalized)
-                                    .foregroundColor(.primary)
-                                
-                                Spacer()
-                                
-                                Image(systemName: "chevron.down")
-                                    .foregroundColor(.secondary)
-                            }
-                            .foregroundColor(.primary)
-                            .padding()
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(10)
-                        }
-                    }
-                    
-                    // Recurrence Information (if applicable)
-                    if transaction.recurrence != .oneTime {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Recurring Transaction")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            
-                            HStack {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                Text("Repeats \(transaction.recurrence.rawValue.lowercased())")
-                                Spacer()
-                                Button("Cancel Series") {
-                                    showingRecurrenceAlert = true
-                                }
-                                .foregroundColor(.red)
-                            }
-                            .padding()
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(10)
-                        }
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 10)
-            }
-            
-            Spacer()
-        }
-        .background(Color("BackgroundColor"))
-        .edgesIgnoringSafeArea(.bottom)
-        .presentationDetents(transaction.recurrence == .oneTime ? [.medium] : [.fraction(0.7)])
-        .presentationDragIndicator(.visible)
-        .alert("Cancel Recurring Transaction", isPresented: $showingRecurrenceAlert) {
-            Button("This Transaction Only") {
-                recurrenceCancellationType = .thisOnly
-                cancelRecurringTransaction()
-                dismiss()
-            }
-            
-            Button("This & Future") {
-                recurrenceCancellationType = .thisAndFuture
-                cancelRecurringTransaction()
-                dismiss()
-            }
-            
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Would you like to cancel just this transaction or this and all future occurrences?")
-        }
-    }
-    
-    private func updateTransaction() {
-        viewModel.updateTransaction(transaction)
-    }
-    
-    private func cancelRecurringTransaction() {
-        switch recurrenceCancellationType {
-        case .thisOnly:
-            // Delete just this instance
-            viewModel.deleteTransaction(transaction)
-            
-        case .thisAndFuture:
-            // Delete this and all future occurrences
-            let currentDate = transaction.date
-            viewModel.transactions.removeAll { transaction in
-                // Remove transactions with the same category, amount, and recurrence that occur on or after this one
-                transaction.category == self.transaction.category &&
-                transaction.amount == self.transaction.amount &&
-                transaction.recurrence == self.transaction.recurrence &&
-                transaction.date >= currentDate
-            }
-            viewModel.pendingTransactions.removeAll { transaction in
-                // Remove pending transactions with the same characteristics
-                transaction.category == self.transaction.category &&
-                transaction.amount == self.transaction.amount &&
-                transaction.recurrence == self.transaction.recurrence
-            }
-            viewModel.saveTransactions()
-            viewModel.savePendingTransactions()
-        }
-    }
-}
-import SwiftUI
-import Charts
-
 struct FinancialSummaryView: View {
     @ObservedObject var viewModel: BudgetViewModel
     @Binding var selectedTimePeriod: TimePeriod
@@ -1011,8 +430,8 @@ struct TrendCard: View {
                 }
 
                 Text("\(trendPercentage >= 0 ? "+" : "")\(String(format: "%.1f", trendPercentage))%")
-                    .font(.title2)
-                    .fontWeight(.bold)
+                    .font(.system(size: 24, weight: .heavy, design: .default))
+                    .fontWeight(.heavy)
                     .foregroundColor(color)
             }
             .frame(minWidth: 0, maxWidth: .infinity)
@@ -1056,8 +475,8 @@ struct ExpandedTrendCard: View {
                 }
 
                 Text("\(trendPercentage >= 0 ? "+" : "")\(String(format: "%.2f", trendPercentage))%")
-                    .font(.title)
-                    .fontWeight(.bold)
+                    .font(.system(size: 28, weight: .heavy, design: .default))
+                    .fontWeight(.heavy)
                     .foregroundColor(color)
                 
                 VStack(alignment: .leading, spacing: 8) {
@@ -1454,6 +873,11 @@ struct TransactionListView: View {
     @State private var showingAllTransactionsView = false
     @State private var showUpcomingTransactions = false
     
+    // Pagination states
+    @State private var paginationLimit = 50
+    @State private var showingLoadMoreIndicator = false
+    @State private var isLoadingMore = false
+    
     @Environment(\.colorScheme) var colorScheme
 
     // Regular transactions (non-upcoming)
@@ -1488,6 +912,11 @@ struct TransactionListView: View {
         return filtered.sorted(by: { $0.date > $1.date })
     }
     
+    // Paginated transactions for display
+    var paginatedTransactions: [Transaction] {
+        return Array(filteredTransactions.prefix(paginationLimit))
+    }
+    
     // Get upcoming transactions
     var upcomingTransactions: [Transaction] {
         let upcoming = viewModel.allTransactions
@@ -1502,7 +931,7 @@ struct TransactionListView: View {
     }
 
     private var groupedTransactions: [Date: [Transaction]] {
-        Dictionary(grouping: filteredTransactions) { Calendar.current.startOfDay(for: $0.date) }
+        Dictionary(grouping: paginatedTransactions) { Calendar.current.startOfDay(for: $0.date) }
     }
 
     var body: some View {
@@ -1531,6 +960,8 @@ struct TransactionListView: View {
                         color: Color.gray
                     ) {
                         selectedType = nil
+                        // Reset pagination when filter changes
+                        resetPagination()
                     }
 
                     // Transaction Type Filters
@@ -1541,6 +972,8 @@ struct TransactionListView: View {
                             color: colorForTransactionType(type)
                         ) {
                             selectedType = type
+                            // Reset pagination when filter changes
+                            resetPagination()
                         }
                     }
                 }
@@ -1577,6 +1010,10 @@ struct TransactionListView: View {
                 )
             }
             .onAppear(perform: simulateLoading)
+            // Reset pagination when time period changes
+            .onChange(of: selectedTimePeriod) { _ in
+                resetPagination()
+            }
         }
     }
 
@@ -1676,11 +1113,79 @@ struct TransactionListView: View {
                     }
                 }
             }
+            
+            // Load More Section
+                       if filteredTransactions.count > paginationLimit {
+                           Section {
+                               Button(action: loadMoreTransactions) {
+                                   ZStack {
+                                       if isLoadingMore {
+                                           ProgressView()
+                                               .progressViewStyle(CircularProgressViewStyle(tint: colorScheme == .dark ? .white : Color.primaryBluePurple))
+                                               .scaleEffect(0.8)
+                                       } else {
+                                           HStack(spacing: 6) {
+                                               Text("Load More")
+                                                   .font(Font.custom("Roboto-Medium", size: 14))
+                                                   .foregroundColor(colorScheme == .dark ? .white.opacity(0.9) : Color.primaryBluePurple)
+                                               
+                                               Image(systemName: "chevron.down")
+                                                   .font(.system(size: 12, weight: .medium))
+                                                   .foregroundColor(colorScheme == .dark ? .white.opacity(0.6) : .blue.opacity(0.7))
+                                           }
+                                       }
+                                   }
+                                   .frame(height: 36)
+                                   .frame(maxWidth: .infinity)
+                                   .background(
+                                       RoundedRectangle(cornerRadius: 18)
+                                           .fill(
+                                               colorScheme == .dark ?
+                                                   Color.primaryBluePurple.opacity(0.15) :
+                                                   Color.primaryBluePurple.opacity(0.08)
+                                           )
+                                   )
+                                   .padding(.horizontal, 70)
+                                   .padding(.vertical, 5)
+                               }
+                               .buttonStyle(PlainButtonStyle())
+                               .disabled(isLoadingMore)
+                               
+                               // Transaction count indicator
+                               Text("Showing \(paginationLimit) of \(filteredTransactions.count) transactions")
+                                   .font(.caption)
+                                   .foregroundColor(.secondary)
+                                   .frame(maxWidth: .infinity, alignment: .center)
+                                   .padding(.top, 2)
+                                   .padding(.bottom, 10)
+                           }
+                           .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                           .listRowSeparator(.hidden)
+                           .listRowBackground(Color.clear)
+                       }
+                   }
+                   .listStyle(PlainListStyle())
+                   .listSectionSpacing(0)
+                   .scrollContentBackground(.hidden)
+                   .scrollIndicators(.hidden)
+               }
+    
+    // Load more transactions function
+    private func loadMoreTransactions() {
+        if filteredTransactions.count > paginationLimit {
+            isLoadingMore = true
+            
+            // Simulate network delay (remove this in production)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                paginationLimit += 50 // Load 50 more transactions
+                isLoadingMore = false
+            }
         }
-        .listStyle(PlainListStyle())
-        .listSectionSpacing(0)
-        .scrollContentBackground(.hidden)
-        .scrollIndicators(.hidden)
+    }
+    
+    // Reset pagination when filters change
+    private func resetPagination() {
+        paginationLimit = 50
     }
 
     @ViewBuilder
@@ -1778,7 +1283,6 @@ struct TransactionListView: View {
         return "\(prefix)$\(formattedAmount)"
     }
 }
-
 
 import SwiftUI
 
@@ -2029,7 +1533,7 @@ struct FilterButton: View {
 
     var body: some View {
         Button(action: {
-            let impact = UIImpactFeedbackGenerator(style: .light) // Haptic feedback
+            let impact = UIImpactFeedbackGenerator(style: .soft) // Haptic feedback
             impact.impactOccurred()
             action() // Perform the original action
         }) {
@@ -2107,7 +1611,11 @@ struct TransactionTypeSelector: View {
     @Binding var selectedType: Transaction.TransactionType
     @State private var hapticEngine: CHHapticEngine?
 
-    // Simplified for only Expense and Income
+    // Strong, vibrant blue tones from the original implementation
+    private let lightBlueColor = Color(red: 140/255, green: 160/255, blue: 255/255)
+    private let bluePurpleColor = Color(red: 87/255, green: 113/255, blue: 255/255)
+    private let deepBlueColor = Color(red: 70/255, green: 85/255, blue: 255/255)
+
     private let transactionTypes: [Transaction.TransactionType] = [.expense, .income]
     private let customDisplayNames: [Transaction.TransactionType: String] = [
         .expense: "Expense",
@@ -2161,7 +1669,7 @@ struct TransactionTypeSelector: View {
                         Image(systemName: transactionIcons[type] ?? "questionmark.circle")
                             .font(.system(size: 20))
                             .foregroundColor(selectedType == type ? .white : .primary)
-                            .opacity(selectedType == type ? 1 : 0.7) // Slight opacity fade for unselected
+                            .opacity(selectedType == type ? 1 : 0.7)
                             .animation(.easeInOut(duration: 0.3), value: selectedType)
 
                         if selectedType == type {
@@ -2169,16 +1677,27 @@ struct TransactionTypeSelector: View {
                                 .font(.system(size: 14))
                                 .fontWeight(.medium)
                                 .foregroundColor(.white)
-                                .transition(.opacity.combined(with: .move(edge: .bottom))) // Text appears from below
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
                                 .animation(.easeInOut(duration: 0.3), value: selectedType)
                         }
                     }
                     .padding(.vertical, 8)
                     .padding(.horizontal, 18)
-                    .background(selectedType == type ? bluePurpleColor : Color.gray.opacity(0.2))
+                    .background {
+                        if selectedType == type {
+                            // Use the blue colors in a linear gradient like the plus button
+                            LinearGradient(
+                                gradient: Gradient(colors: [bluePurpleColor, deepBlueColor]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        } else {
+                            Color.gray.opacity(0.2)
+                        }
+                    }
                     .cornerRadius(10)
-                    .scaleEffect(selectedType == type ? 1.05 : 1) // Bounce effect (slight scale increase)
-                    .animation(.spring(response: 0.4, dampingFraction: 0.7), value: selectedType) // Bounce on selection
+                    .scaleEffect(selectedType == type ? 1.05 : 1)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.7), value: selectedType)
                 }
             }
         }
@@ -2351,14 +1870,13 @@ struct IconSelectorView: View {
         .cornerRadius(16)  // Rounded container
     }
 }
-
 import SwiftUI
 
 struct SaveButtonView: View {
     let onSave: () -> Void
     let isEnabled: Bool
     let hapticFeedback = UIImpactFeedbackGenerator(style: .light)
-    
+
     var body: some View {
         Button(action: {
             hapticFeedback.impactOccurred()
@@ -2369,28 +1887,64 @@ struct SaveButtonView: View {
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(backgroundView) // Using the custom background view
+                .background(animatedBackground)
                 .cornerRadius(16)
         }
         .disabled(!isEnabled)
         .padding()
     }
-    
-    // Custom background view for the button
-    private var backgroundView: some View {
+
+    private var animatedBackground: some View {
         Group {
             if isEnabled {
-                Color.primaryBluePurple // Flat yellow color when enabled
+                TimelineView(.animation(minimumInterval: 0.02)) { timeline in
+                    let date = timeline.date.timeIntervalSinceReferenceDate
+                    Canvas { context, size in
+                        let centers = [
+                            CGPoint(x: size.width * (0.5 + 0.1 * CGFloat(sin(date * 0.6))),
+                                    y: size.height * (0.4 + 0.1 * CGFloat(cos(date * 0.8)))),
+                            CGPoint(x: size.width * (0.3 + 0.1 * CGFloat(sin(date * 0.9))),
+                                    y: size.height * (0.6 + 0.1 * CGFloat(cos(date * 0.7)))),
+                            CGPoint(x: size.width * (0.7 + 0.1 * CGFloat(sin(date * 0.7))),
+                                    y: size.height * (0.5 + 0.1 * CGFloat(cos(date * 0.5))))
+                        ]
+
+                        let blue1 = Color(red: 136/255, green: 148/255, blue: 255/255)
+                        let blue2 = Color(red: 87/255, green: 113/255, blue: 255/255)
+                        let blue3 = Color(red: 78/255, green: 87/255, blue: 255/255)
+
+                        // Less white fade by using more opaque colors
+                        let gradients = [
+                            Gradient(colors: [blue1, blue2.opacity(0.5)]),
+                            Gradient(colors: [blue2, blue3.opacity(0.4)]),
+                            Gradient(colors: [blue3, blue1.opacity(0.3)])
+                        ]
+
+                        for i in 0..<3 {
+                            context.fill(
+                                Path(CGRect(origin: .zero, size: size)),
+                                with: .radialGradient(
+                                    gradients[i],
+                                    center: centers[i],
+                                    startRadius: 0,
+                                    endRadius: size.width * 0.8
+                                )
+                            )
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 16))
             } else {
-                Color.secondary.opacity(0.3) // Greyed-out color when disabled
+                Color.gray.opacity(0.3)
             }
         }
     }
 }
+
 import SwiftUI
 import UIKit
 
-// Haptic Feedback Wrapper
+
 struct HapticFeedback {
     static func generateImpact(style: UIImpactFeedbackGenerator.FeedbackStyle = .medium) {
         let generator = UIImpactFeedbackGenerator(style: style)
@@ -2398,8 +1952,6 @@ struct HapticFeedback {
         generator.impactOccurred()
     }
 }
-import SwiftUI
-import UIKit
 
 struct AddTransactionView: View {
     @ObservedObject var viewModel: BudgetViewModel
@@ -2474,7 +2026,7 @@ struct AddTransactionView: View {
             TransactionTypeSelector(selectedType: $type)
                 .padding(.top, -70)
             
-            // Amount Input Section
+            // Amount Input Section - Now clickable to toggle decimal pad
             HStack {
                 Spacer()
                 ZStack {
@@ -2494,65 +2046,38 @@ struct AddTransactionView: View {
                         .frame(maxWidth: .infinity, alignment: .center)
                         .scaleEffect(keyframeBounce ? 1.05 : 1)
                         .animation(.interpolatingSpring(stiffness: 120, damping: 5), value: keyframeBounce)
+                        .contentShape(Rectangle()) // Make entire area tappable
+                        .onTapGesture {
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                                showDecimalPad.toggle()
+                            }
+                            HapticFeedback.generateImpact(style: showDecimalPad ? .medium : .rigid)
+                        }
                 }
             }
-            .padding(.top, 50)
+            .padding(.top, 80)
             .padding(.bottom, 70)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.trailing, 10)
-            
-            // Decimal Pad Toggle Button
-            HStack {
-                Button(action: {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                        showDecimalPad.toggle()
-                    }
-                    HapticFeedback.generateImpact(style: showDecimalPad ? .medium : .rigid)
-                }) {
-                    HStack {
-                        Image(systemName: showDecimalPad ? "checkmark.circle.fill" : "viewfinder.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(showDecimalPad ? .white : .primary)
-                            .scaleEffect(showDecimalPad ? 1.1 : 1.0)
-                            .opacity(showDecimalPad ? 1.0 : 0.8)
-                            .animation(.easeInOut(duration: 0.3), value: showDecimalPad)
-                        
-                        Text(showDecimalPad ? "Done" : "Decimal Pad")
-                            .font(.system(size: 16))
-                            .foregroundColor(showDecimalPad ? .white : .primary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .opacity(showDecimalPad ? 1 : 0.9)
-                            .scaleEffect(showDecimalPad ? 1.05 : 1.0)
-                            .padding(.trailing, 30)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(showDecimalPad ? Color(hex: "#4CAF50") : Color.gray.opacity(0.1))
-                    .cornerRadius(10)
-                    .frame(width: showDecimalPad ? 270 : 310)
-                    .animation(.easeInOut(duration: 0.3), value: showDecimalPad)
-                }
-                .padding(.bottom, 16)
-            }
             
             ZStack {
                 if !showDecimalPad {
                     VStack(spacing: 15) {
                         CategoryInputView(category: $category, selectedIcon: $selectedIcon)
                             .padding(.horizontal, 40)
-                            .frame(height: 70)
+                            .frame(height: 80)
                         
                         RecurrencePickerView(recurrence: $recurrence)
                             .padding(.horizontal, 40)
-                            .frame(height: 70)
+                            .frame(height: 80)
                         
                         NotesInputView(notes: $notes)
                             .padding(.horizontal, 40)
-                            .frame(height: 70)
+                            .frame(height: 80)
                         
                         IconSelectorView(selectedIcon: $selectedIcon)
                             .padding(.horizontal, 40)
-                            .frame(height: 70)
+                            .frame(height: 80)
                     }
                     .padding(.bottom, 25)
                     .transition(.opacity.combined(with: .scale(scale: 0.9))) // Smooth fade and scale effect
@@ -2560,8 +2085,8 @@ struct AddTransactionView: View {
                 
                 if showDecimalPad {
                     decimalPadView()
-                        .padding(.bottom, 20)
-                        .frame(height: 350)
+                        .padding(.bottom, 50)
+                        .frame(height: 390)
                         .transition(.opacity.combined(with: .scale(scale: 1.1))) // Smooth fade and scale effect
                 }
             }
@@ -2577,10 +2102,10 @@ struct AddTransactionView: View {
                             amount: amountValue,
                             category: category,
                             type: type,
-                            recurrence: recurrence,  // ✅ Correct: recurrence is of type `RecurrenceType`
-                            notes: notes.isEmpty ? nil : notes,  // ✅ Correct: notes is `String?`
-                            icon: selectedIcon,  // ✅ Correct: selectedIcon is `String`
-                            date: selectedDate  // ✅ Correct: selectedDate is `Date`
+                            recurrence: recurrence,
+                            notes: notes.isEmpty ? nil : notes,
+                            icon: selectedIcon,
+                            date: selectedDate
                         )
                         
                         viewModel.addTransaction(transaction)
@@ -2591,7 +2116,7 @@ struct AddTransactionView: View {
                 },
                 isEnabled: !amount.isEmpty && !category.isEmpty && !isZeroAmount()
             )
-            .padding(.bottom, 30)
+            .padding(.bottom, 0)
             .padding(.horizontal, 20)
         }
         .background(Color("BackgroundColor"))
@@ -2627,10 +2152,10 @@ struct AddTransactionView: View {
                         }
                         .padding(.leading, 1) // Align to left
                         // Title
-                                        Text("Select Date & Time")
-                                            .font(.system(size: 18, weight: .semibold, design: .rounded))
-                                            .foregroundColor(Color(UIColor.label)) // Adapts to Light/Dark Mode
-                                            .padding(.vertical, -50)
+                        Text("Select Date & Time")
+                            .font(.system(size: 18, weight: .semibold, design: .rounded))
+                            .foregroundColor(Color(UIColor.label)) // Adapts to Light/Dark Mode
+                            .padding(.vertical, -50)
                         
                         // Graphical Date & Time Picker
                         DatePicker(
@@ -2820,9 +2345,6 @@ struct ContentView: View {
     @Environment(\.colorScheme) var colorScheme
     @State private var showOnboarding = !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") // Checks if onboarding is needed
     
-    
-    
-    
     //Floating Action Button Additions
     private let childButtonColor = Color(red: 0.6, green: 0.5, blue: 0.9)
     @State private var isLongPressing = false
@@ -2845,10 +2367,10 @@ struct ContentView: View {
                     // Overview Tab
                     NavigationView {
                         VStack {
-                            Image("SmartStash Logo (2)")
+                            Image("SmartStash Finance Logo")
                                 .resizable()
                                 .scaledToFit()
-                                .frame(width: 170, height: 30)
+                                .frame(width: 165, height: 30)
                                 .padding(.top, -28)
                                 .padding(.leading, 32)
                                 .padding(.trailing, 230)
@@ -2938,22 +2460,6 @@ struct ContentView: View {
     }
 
 
-    private var weeklyStoryButton: some View {
-        Button(action: { showingWeeklyStory = true }) {
-            Image(systemName: "book")
-                .fontWeight(.medium)
-                .font(.system(size: 12)) // ✅ Make the icon larger
-                .foregroundStyle(colorScheme == .dark ? .white : .black)
-                .opacity(0.8)
-                .padding(8)
-                .background(
-                    Circle()
-                        .fill(colorScheme == .dark ? Color.gray.opacity(0.2) : Color.gray.opacity(0.15))
-                        .frame(width: 32, height: 32) // ✅ Keep the circle the same size
-                )
-        }
-        .padding(.top, 10)
-    }
     
     func generateWeeklyStories() -> [FinancialStory] {
         let transactions = budgetViewModel.transactions
@@ -3049,8 +2555,16 @@ struct ContentView: View {
                                     .background(
                                         LinearGradient(
                                             gradient: Gradient(colors: [
-                                                Color.purple,
-                                                Color(red: 0.5, green: 0.2, blue: 0.8) // A fun purple shade
+                                                Color(red: 0.60, green: 0.80, blue: 1.0),
+                                                Color(red: 0.55, green: 0.75, blue: 1.0),
+                                                Color(red: 0.50, green: 0.70, blue: 1.0),
+                                                Color(red: 0.45, green: 0.65, blue: 1.0),
+                                                Color(red: 0.40, green: 0.60, blue: 1.0),
+                                                Color(red: 0.35, green: 0.55, blue: 1.0),
+                                                Color(red: 0.30, green: 0.50, blue: 1.0),
+                                                Color(red: 0.25, green: 0.45, blue: 1.0)
+
+
                                             ]),
                                             startPoint: .topLeading,
                                             endPoint: .bottomTrailing
@@ -3071,7 +2585,7 @@ struct ContentView: View {
                             .padding()
                             .background(
                                 LinearGradient(
-                                    gradient: Gradient(colors: [bluePurpleColor, bluePurpleColor.opacity(0.6)]),
+                                    gradient: Gradient(colors: [bluePurpleColor, deepBlueColor]),
                                     startPoint: .top,
                                     endPoint: .bottom
                                 )
@@ -3349,6 +2863,9 @@ struct ContentView: View {
 }
 
 let bluePurpleColor = Color(red: 87/255, green: 113/255, blue: 255/255)
+let lightBlueColor = Color(red: 136/255, green: 148/255, blue: 255/255)
+let deepBlueColor = Color(red: 78/255, green: 87/255, blue: 255/255)
+
 #Preview {
     ContentView()
 }

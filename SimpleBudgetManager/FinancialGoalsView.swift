@@ -722,13 +722,11 @@ struct NumberFormatterHelper {
         }
     }
 }
-
-
 struct FinancialGoalsView: View {
     @StateObject private var goalsViewModel = FinancialGoalsViewModel()
     @State private var showingAddGoal = false
     @State private var selectedCategory: FinancialGoal.GoalCategory? = nil
-    @Environment(\.colorScheme) var colorScheme  // Detect dark mode
+    @Environment(\.colorScheme) var colorScheme
     
     let columns = [
         GridItem(.flexible(), spacing: 15),
@@ -742,10 +740,12 @@ struct FinancialGoalsView: View {
     }
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                // Dashboard Header
-                VStack(alignment: .leading, spacing: 15) {
+        NavigationStack {
+            ZStack {
+                Color(.systemBackground).ignoresSafeArea()
+                
+                VStack(spacing: 0) {
+                    // Dashboard Card
                     HStack {
                         VStack(alignment: .leading) {
                             Text("Total Savings")
@@ -755,9 +755,7 @@ struct FinancialGoalsView: View {
                                 .font(.title)
                                 .fontWeight(.bold)
                         }
-                        
                         Spacer()
-                        
                         VStack(alignment: .trailing) {
                             Text("Goals Completed")
                                 .font(.caption)
@@ -766,59 +764,110 @@ struct FinancialGoalsView: View {
                                 .font(.title3)
                                 .fontWeight(.semibold)
                         }
-                    
                     }
                     .padding()
                     .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(colorScheme == .dark ? Color(UIColor.systemGray6) : Color.gray.opacity(0.1)) // Regular gray for light mode
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(colorScheme == .dark ? Color(UIColor.systemGray6) : Color.gray.opacity(0.08))
                     )
-                }
-                .padding()
-                .padding(.vertical, -100)
-                
-                // Category Filter Scroll
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        CategoryFilterButton(
-                            title: "All Goals",
-                            isSelected: selectedCategory == nil
-                        ) {
-                            selectedCategory = nil
-                        }
-                        
-                        ForEach(FinancialGoal.GoalCategory.allCases, id: \.self) { category in
-                            CategoryFilterButton(
-                                title: category.rawValue,
-                                isSelected: selectedCategory == category
-                            ) {
-                                selectedCategory = category
-                            }
-                        }
-                    }
                     .padding(.horizontal)
-                }
-                .padding(.vertical, 10)
-                
-                // Goals Grid
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 15) {
-                        ForEach(filteredGoals) { goal in
-                            NavigationLink(destination: GoalDetailsView(viewModel: goalsViewModel, goal: goal)) {
-                                GoalCardView(goal: goal)
+                    
+                    // Filter Bar
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            CategoryFilterButton(
+                                title: "All Goals",
+                                isSelected: selectedCategory == nil
+                            ) {
+                                selectedCategory = nil
                             }
-                            .buttonStyle(PlainButtonStyle())
+                            ForEach(FinancialGoal.GoalCategory.allCases, id: \.self) { category in
+                                CategoryFilterButton(
+                                    title: category.rawValue,
+                                    isSelected: selectedCategory == category
+                                ) {
+                                    selectedCategory = category
+                                }
+                            }
                         }
-                        
-                        // Add Goal Card
-                        Button(action: { showingAddGoal = true }) {
-                            AddGoalCardView()
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(colorScheme == .dark ? Color(UIColor.systemGray5) : Color.gray.opacity(0.04))
+                    )
+                    .padding(.horizontal)
+                    
+                    // Goals Grid or Placeholder
+                    if filteredGoals.isEmpty {
+                        VStack {
+                            Spacer()
+                                .frame(height: 60)
+                            
+                            VStack(spacing: 16) {
+                                Image(systemName: "target")
+                                    .font(.system(size: 50, weight: .light))
+                                    .foregroundColor(.secondary)
+                                
+                                Text("No Goals Yet")
+                                    .font(.title3)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.primary)
+                                
+                                Text("Tap + to add your first goal")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ScrollView {
+                            LazyVGrid(columns: columns, spacing: 18) {
+                                ForEach(filteredGoals) { goal in
+                                    NavigationLink(destination: GoalDetailsView(viewModel: goalsViewModel, goal: goal)) {
+                                        GoalCardView(goal: goal)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.top, 18)
+                            .padding(.bottom, 100) // For floating button
                         }
                     }
-                    .padding(15)
+                }
+                // Floating Plus Button (bottom right)
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button(action: { showingAddGoal = true }) {
+                            Image(systemName: "plus")
+                                .foregroundStyle(.white)
+                                .font(.title)
+                                .padding()
+                                .background(
+                                    LinearGradient(
+                                        gradient: Gradient(colors: [
+                                            Color(red: 140/255, green: 160/255, blue: 255/255),
+                                            Color(red: 70/255, green: 85/255, blue: 255/255)
+                                        ]),
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .clipShape(Circle())
+                                .shadow(radius: 10)
+                        }
+                        .padding(.trailing, 24)
+                        .padding(.bottom, 36)
+                    }
                 }
             }
-            .background(colorScheme == .dark ? Color.black : Color.white)
+            .navigationTitle("Goals")
         }
         .sheet(isPresented: $showingAddGoal) {
             AddGoalView(viewModel: goalsViewModel, isPresented: $showingAddGoal)

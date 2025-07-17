@@ -4,6 +4,7 @@
 //
 //  Created by Simon Wilke on 3/2/25.
 //
+
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -19,193 +20,186 @@ struct SettingsView: View {
     @State private var showImportError = false
     @EnvironmentObject var budgetViewModel: BudgetViewModel
     @State private var showingCSVMapping = false
-    @State private var showingDocumentPicker = false // New property to control document picker
+    @State private var showingDocumentPicker = false
     @State private var showingColumnMapping = false
-
-    // Delete All Transactions Confirmation
+    
     @State private var showDeleteAllAlert = false
     @State private var showFinalDeleteWarning = false
     @State private var deleteConfirmationText = ""
-
+    @State private var hasShownDeleteSheet = false
+    @State private var hasShownDocumentPicker = false
+    @State private var hasShownColumnMapping = false
+    @State private var hasShownOnboarding = false
+    
     var body: some View {
-        NavigationView {
-            List {
-                Section(header: Text("Transaction Management")) {
-                    Button(action: { showingOnboarding = true }) {
-                        HStack {
-                            Image(systemName: "square.and.arrow.down")
-                                .foregroundColor(bluePurpleColor)
-                            Text("Import Transactions from CSV")
-                        }
-                    }
-                    
-                    Button(action: exportCSV) {
-                        HStack {
-                            Image(systemName: "square.and.arrow.up")
-                                .foregroundColor(bluePurpleColor)
-                            Text("Export Transactions to CSV")
-                        }
-                    }
+        List {
+            Section("Transaction Management") {
+                SettingsRow(icon: "square.and.arrow.down", color: .blue, title: "Import Transactions from CSV") {
+                    showingOnboarding = true
                 }
-                
-                Section(header: Text("Display Options")) {
-                    Toggle("Show Trend Chart", isOn: $showChart)
-                }
-                
-                // ⚠️ Danger Zone - Delete All Transactions
-                Section(header: Text("Danger Zone")) {
-                    Button(action: { showDeleteAllAlert = true }) {
-                        HStack {
-                            Image(systemName: "folder.badge.minus")
-                                .foregroundColor(.red)
-                            Text("Delete All Transactions")
-                                .foregroundColor(.red)
-                        }
-                    }
-                }
-                
-                Section(header: Text("Support & Legal")) {
-                    Link(destination: URL(string: "https://yourapp.com/terms")!) {
-                        HStack {
-                            Image(systemName: "doc.text")
-                                .foregroundColor(bluePurpleColor)
-                            Text("Terms of Service")
-                        }
-                    }
-                    
-                    Link(destination: URL(string: "https://yourapp.com/privacy")!) {
-                        HStack {
-                            Image(systemName: "lock.shield")
-                                .foregroundColor(bluePurpleColor)
-                            Text("Privacy Policy")
-                        }
-                    }
-                    
-                    Button(action: sendFeedback) {
-                        HStack {
-                            Image(systemName: "envelope")
-                                .foregroundColor(bluePurpleColor)
-                            Text("Send Feedback")
-                        }
-                    }
-                }
-                
-                Section {
-                    VStack(alignment: .center, spacing: 4) {
-                        Text("Smartstash")
-                            .font(.headline)
-                        Text("Version 0.1.0")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                        
-                        Text("© 2025 Smartstash Inc. All rights reserved.")
-                            .font(.footnote)
-                            .foregroundColor(.gray)
-                            .multilineTextAlignment(.center)
-                            .padding(.top, 2)
-                        
-                        Text("Made by Simon in USA")
-                            .font(.footnote)
-                            .foregroundColor(.gray)
-                            .multilineTextAlignment(.center)
-                            .padding(.top, 2)
-                    }
-                    .frame(maxWidth: .infinity)
+                SettingsRow(icon: "square.and.arrow.up", color: .indigo, title: "Export Transactions to CSV") {
+                    exportCSV()
                 }
             }
-            .listStyle(InsetGroupedListStyle())
-            .navigationBarTitleDisplayMode(.automatic)
-            .padding(.top, -60)
-            .alert("Delete All Transactions?", isPresented: $showDeleteAllAlert) {
-                Button("Yes, Continue", role: .destructive) {
-                    showFinalDeleteWarning = true
+            
+            Section("Display Options") {
+                HStack {
+                    IconBadge(icon: "chart.line.uptrend.xyaxis", color: .teal)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show Trend Chart")
+                            .font(.system(size: 16, weight: .medium))
+                  
+                    }
+                    Spacer()
+                    Toggle("", isOn: $showChart)
+                        .toggleStyle(SwitchToggleStyle(tint: .blue))
                 }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("This action is **irreversible**. Are you absolutely sure?")
+                .padding(.vertical, 4)
             }
-            .sheet(isPresented: $showFinalDeleteWarning) {
-                DeleteAllConfirmationView(
-                    deleteConfirmationText: $deleteConfirmationText,
-                    confirmAction: deleteAllTransactions
-                )
-            }
-            .sheet(isPresented: $showingDocumentPicker) {
-                DocumentPicker(csvData: $importedCSVData)
-                    .onDisappear {
-                        if let csvData = importedCSVData {
-                            // Show column mapping view instead of direct parsing
-                            showingColumnMapping = true
-                        }
-                    }
-            }
-            .sheet(isPresented: $showingColumnMapping) {
-                CSVColumnMappingView(isPresented: $showingColumnMapping, csvData: $importedCSVData) { mappedTransactions in
-                    // Handle the returned transactions
-                    importedTransactions = mappedTransactions
-                    if !importedTransactions.isEmpty {
-                        for transaction in importedTransactions {
-                            budgetViewModel.addTransaction(transaction)
-                        }
-                        showImportSuccess = true
-                    } else {
-                        importError = "No valid transactions found in CSV file."
-                        showImportError = true
-                    }
+            
+            Section("Danger Zone") {
+                SettingsRow(icon: "trash.fill", color: .red, title: "Delete All Transactions", subtitle: "This action cannot be undone", titleColor: .red) {
+                    showDeleteAllAlert = true
+                    hasShownDeleteSheet = false
                 }
             }
-            .alert("Import Successful", isPresented: $showImportSuccess) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text("Successfully imported \(importedTransactions.count) transactions.")
+            
+            Section("Support & Legal") {
+                LinkRow(icon: "doc.text", color: .purple, title: "Terms of Service", subtitle: "Read our terms and conditions", url: "https://yourapp.com/terms")
+                LinkRow(icon: "lock.shield", color: .green, title: "Privacy Policy", subtitle: "How we protect your data", url: "https://yourapp.com/privacy")
+                SettingsRow(icon: "envelope", color: .orange, title: "Send Feedback", subtitle: "Help us improve the app") {
+                    sendFeedback()
+                }
             }
-            .alert("Import Failed", isPresented: $showImportError) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(importError ?? "Unknown error occurred during import.")
+            
+            Section {
+                VStack(spacing: 8) {
+                    Image(systemName: "dollarsign.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundColor(.blue)
+                    Text("Smartstash Finance")
+                        .font(.system(size: 18, weight: .semibold))
+                    Text("Version 0.1.0")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                    Text("© 2025 Smartstash Inc.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
             }
-            .sheet(isPresented: $showingOnboarding) {
-                CSVImportTutorial(isPresented: $showingOnboarding, startImport: {
-                    // When the import button is clicked in the tutorial, show the document picker
-                    showingDocumentPicker = true
-                })
+            .listRowBackground(Color.clear)
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.large)
+        
+        .onChange(of: importedCSVData) { newValue in
+            guard let data = newValue, !data.isEmpty else { return }
+            if !showingColumnMapping {
+                showingColumnMapping = true
             }
         }
+        
+        .alert("Delete All Transactions?", isPresented: $showDeleteAllAlert) {
+            Button("Yes, Continue", role: .destructive) {
+                showFinalDeleteWarning = true
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This action is **irreversible**. Are you absolutely sure?")
+        }
+        
+        .sheet(isPresented: $showFinalDeleteWarning, onDismiss: {
+            hasShownDeleteSheet = true
+        }) {
+            DeleteAllConfirmationView(
+                deleteConfirmationText: $deleteConfirmationText,
+                confirmAction: deleteAllTransactions
+            )
+        }
+        
+        .sheet(isPresented: $showingOnboarding, onDismiss: {
+            hasShownOnboarding = true
+        }) {
+            CSVImportTutorial(
+                isPresented: $showingOnboarding,
+                startImport: {
+                    importedCSVData = nil
+                    showingDocumentPicker = true
+                    hasShownDocumentPicker = false
+                }
+            )
+        }
+        
+        .sheet(isPresented: $showingDocumentPicker, onDismiss: {
+            hasShownDocumentPicker = true
+        }) {
+            DocumentPicker(csvData: $importedCSVData)
+        }
+        
+        .sheet(isPresented: $showingColumnMapping, onDismiss: {
+            hasShownColumnMapping = true
+        }) {
+            CSVColumnMappingView(isPresented: $showingColumnMapping, csvData: $importedCSVData) { mappedTransactions in
+                importedTransactions = mappedTransactions
+                if !importedTransactions.isEmpty {
+                    for transaction in importedTransactions {
+                        budgetViewModel.addTransaction(transaction)
+                    }
+                    showImportSuccess = true
+                } else {
+                    importError = "No valid transactions found in CSV file."
+                    showImportError = true
+                }
+            }
+        }
+        
+        .alert("Import Successful", isPresented: $showImportSuccess) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Successfully imported \(importedTransactions.count) transactions.")
+        }
+        
+        .alert("Import Failed", isPresented: $showImportError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(importError ?? "Unknown error occurred during import.")
+        }
     }
-
-
-    // 🗑️ Function to delete all transactions
+    
     private func deleteAllTransactions() {
         budgetViewModel.transactions.removeAll()
         budgetViewModel.pendingTransactions.removeAll()
         budgetViewModel.saveTransactions()
         budgetViewModel.savePendingTransactions()
     }
-
-
-    // MARK: - Export Transactions to CSV
+    
+    
     private func exportCSV() {
-        let transactions = budgetViewModel.transactions // Get all transactions
+        let transactions = budgetViewModel.transactions
         guard !transactions.isEmpty else {
             print("⚠️ No transactions to export.")
             return
         }
-
-        var csvString = "Amount,Category,Date,Notes,Icon\n"
-
+        
+        var csvString = "Amount,Category,Date,Notes,Icon,Type\n"
+        
         for transaction in transactions {
             let amount = String(format: "%.2f", transaction.amount)
             let category = transaction.category
-            let date = formatDate(transaction.date) // Format date
+            let date = formatDate(transaction.date)
             let notes = transaction.notes ?? ""
             let icon = transaction.icon
+            let type = transaction.type.rawValue
             
-            let row = "\(amount),\(category),\(date),\"\(notes)\",\(icon)\n"
+            let row = "\(amount),\(category),\(date),\"\(notes)\",\(icon),\(type)\n"
             csvString.append(row)
         }
-
+        
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("SmartstashTransactions.csv")
-
+        
         do {
             try csvString.write(to: fileURL, atomically: true, encoding: .utf8)
             print("✅ CSV file saved at: \(fileURL.path)")
@@ -219,27 +213,110 @@ struct SettingsView: View {
         }
     }
     
-    // MARK: - Date Formatting Helper
+    
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd" // Adjust format as needed
+        formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
-
-    // MARK: - Send Feedback
+    
+    
     private func sendFeedback() {
         let email = "support@smartstash.app"
         let subject = "Feedback for SmartStash"
         let body = "Hello, I would like to share my feedback about SmartStash..."
         
         let emailString = "mailto:\(email)?subject=\(subject)&body=\(body)"
-        
         if let emailURL = URL(string: emailString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!) {
             UIApplication.shared.open(emailURL)
         }
     }
+    struct SettingsRow: View {
+        let icon: String
+        let color: Color
+        let title: String
+        let subtitle: String?
+        let titleColor: Color
+        let action: () -> Void
+        
+        init(icon: String, color: Color, title: String, subtitle: String? = nil, titleColor: Color = .primary, action: @escaping () -> Void) {
+            self.icon = icon
+            self.color = color
+            self.title = title
+            self.subtitle = subtitle
+            self.titleColor = titleColor
+            self.action = action
+        }
+        
+        var body: some View {
+            Button(action: action) {
+                HStack {
+                    IconBadge(icon: icon, color: color)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(titleColor)
+                        if let subtitle = subtitle {
+                            Text(subtitle)
+                                .font(.system(size: 13))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 4)
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+    }
 
-    // Error type for CSV parsing
+    struct LinkRow: View {
+        let icon: String
+        let color: Color
+        let title: String
+        let subtitle: String
+        let url: String
+        
+        var body: some View {
+            Link(destination: URL(string: url)!) {
+                HStack {
+                    IconBadge(icon: icon, color: color)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.primary)
+                        Text(subtitle)
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+    
+    struct IconBadge: View {
+        let icon: String
+        let color: Color
+        
+        var body: some View {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.white)
+                .frame(width: 28, height: 28)
+                .background(color.gradient)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    
     enum CSVParseError: Error, LocalizedError {
         case emptyFile
         case invalidFormat
@@ -257,6 +334,7 @@ struct SettingsView: View {
         }
     }
     
+    
     private func parseCSV(_ csvString: String) -> Result<[Transaction], Error> {
         // Check if file is empty
         guard !csvString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -265,15 +343,15 @@ struct SettingsView: View {
         
         var transactions: [Transaction] = []
         
-        // Split by newline, handling different line endings
+        
         let rows = csvString.components(separatedBy: CharacterSet.newlines)
         
-        // Need at least a header row and one data row
+        
         guard rows.count > 1 else {
             return .failure(CSVParseError.emptyFile)
         }
         
-        // Parse header row to find column indexes
+        
         let headerRow = rows[0].lowercased()
         let headers = headerRow.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         
@@ -352,12 +430,12 @@ struct SettingsView: View {
             }
             // Default to today's date (in case parsing fails)
             var date = Date()
-
+            
             if dateIndex < columns.count {
                 let dateString = columns[dateIndex].trimmingCharacters(in: .whitespacesAndNewlines)
                 
                 print("📅 Raw Date String from CSV: \(dateString)") // <-- Debugging step
-
+                
                 var parsedSuccessfully = false
                 for formatter in dateFormatters {
                     if let parsedDate = formatter.date(from: dateString) {
@@ -366,7 +444,7 @@ struct SettingsView: View {
                         break
                     }
                 }
-
+                
                 if !parsedSuccessfully {
                     print("⚠️ Failed to parse date: \(dateString)")
                 } else {
@@ -451,30 +529,8 @@ struct SettingsView: View {
         columns.append(currentColumn)
         return columns
     }
-    
-    // Helper function to get default icon based on category
-    private func defaultIconForCategory(_ category: String) -> String {
-        let lowercaseCategory = category.lowercased()
-        
-        if lowercaseCategory.contains("food") || lowercaseCategory.contains("grocer") || lowercaseCategory.contains("restaurant") {
-            return "🛒" // Shopping cart
-        } else if lowercaseCategory.contains("transport") || lowercaseCategory.contains("travel") || lowercaseCategory.contains("gas") {
-            return "🚗" // Car
-        } else if lowercaseCategory.contains("home") || lowercaseCategory.contains("rent") || lowercaseCategory.contains("mortgage") {
-            return "🏠" // House
-        } else if lowercaseCategory.contains("health") || lowercaseCategory.contains("medical") {
-            return "❤️" // Heart
-        } else if lowercaseCategory.contains("entertainment") || lowercaseCategory.contains("fun") {
-            return "🎬" // Clapperboard (Movie)
-        } else if lowercaseCategory.contains("income") || lowercaseCategory.contains("salary") {
-            return "💰" // Money bag
-        } else if lowercaseCategory.contains("saving") || lowercaseCategory.contains("invest") {
-            return "📈" // Upward chart
-        } else {
-            return "💵" // Default: Money
-        }
-    }
 }
+
 
 // MARK: - Document Picker for CSV Import
 struct DocumentPicker: UIViewControllerRepresentable {
@@ -544,32 +600,31 @@ struct CSVImportTutorial: View {
     
     let steps = [
         TutorialStep(
-            image: "doc.text.magnifyingglass",
-            title: "Import Transactions from CSV",
-            description: "You can easily import your transactions from a CSV file from your bank or financial app."
+            image: "arrow.down.doc.fill",
+            title: "Easy as Pie",
+            description: "Import transactions directly from your bank or financial app's CSV export."
         ),
         TutorialStep(
-            image: "doc.plaintext",
-            title: "What You Need",
-            description: "Your CSV file should contain at least these columns: amount, category, and date. Other information like transaction type and notes are helpful but optional."
+            image: "table",
+            title: "Required Format",
+            description: "CSV must include: amount, category, and date. Transaction type and notes are optional but helpful."
         ),
         TutorialStep(
-            image: "list.bullet.rectangle",
-            title: "CSV Format Examples",
-            description: "Your file might look like this:\n\namount,category,date,notes\n45.67,Groceries,2025-02-28,Weekly shopping\n\nOR\n\nDate,Description,Category,Amount\n02/28/2025,Store purchase,Groceries,45.67"
+            image: "doc.text",
+            title: "Example Formats",
+            description: "Examples:\namount,category,date,notes\n45.67,Groceries,2025-02-28,Shopping\n\nOR\n\nDate,Description,Category,Amount\n02/28/2025,Purchase,Groceries,45.67"
         ),
         TutorialStep(
-            image: "building.columns",
-            title: "Common Bank CSV Formats",
-            description: "We support exports from most banks and financial apps. The app will automatically detect column headers from your CSV file."
+            image: "creditcard.fill",
+            title: "Supported Banks",
+            description: "Compatible with most financial institutions. The app automatically detects column headers."
         ),
         TutorialStep(
-            image: "arrow.down.doc",
-            title: "Ready to Import",
-            description: "Tap 'Import CSV' below to select your file and begin importing your transactions."
+            image: "checkmark.circle.fill",
+            title: "Start Import",
+            description: "Tap 'Import CSV' to select your file and begin."
         )
     ]
-    
     var body: some View {
         NavigationView {
             ZStack {
@@ -593,6 +648,8 @@ struct CSVImportTutorial: View {
                                     .font(.system(size: 14, weight: .bold))
                             }
                             .padding(8)
+                            .padding(.trailing, 330)
+                            .padding(.top, 6)
                         }
                         
                         Spacer()
@@ -707,10 +764,45 @@ struct TutorialStep {
     let title: String
     let description: String
 }
+
 struct CSVColumnMappingView: View {
     @Binding var isPresented: Bool
     @Binding var csvData: String?
     var onComplete: ([Transaction]) -> Void
+    @Environment(\.colorScheme) var colorScheme
+    
+    // Theme colors - now adapting to dark mode
+    private var primaryColor: Color {
+        Color(hex: "5E5CE6") // Main brand color - a vibrant blue-purple
+    }
+    
+    private var secondaryColor: Color {
+        colorScheme == .dark ? Color(hex: "2C2C2E") : Color(hex: "F2F2F7")
+    }
+    
+    private var accentColor: Color {
+        Color(hex: "FF375F") // Accent color for highlights
+    }
+    
+    private var textColor: Color {
+        colorScheme == .dark ? Color.white : Color(hex: "1C1C1E")
+    }
+    
+    private var subtextColor: Color {
+        colorScheme == .dark ? Color(hex: "AEAEB2") : Color(hex: "8E8E93")
+    }
+    
+    private var backgroundColor: Color {
+        colorScheme == .dark ? Color(UIColor.systemBackground) : Color(UIColor.systemBackground)
+    }
+    
+    private var cardBackgroundColor: Color {
+        colorScheme == .dark ? Color(hex: "1C1C1E") : Color.white
+    }
+    
+    private var separatorColor: Color {
+        colorScheme == .dark ? Color(UIColor.separator).opacity(0.7) : Color(UIColor.separator).opacity(0.5)
+    }
     
     @State private var headers: [String] = []
     @State private var previewRows: [[String]] = []
@@ -719,6 +811,7 @@ struct CSVColumnMappingView: View {
     @State private var errorMessage: String?
     @State private var showError = false
     @State private var selectedField: String? = nil // Track which field is being mapped
+    @State private var isProcessing = false // Track processing state
     
     // Required column types
     private let requiredMappings = ["amount", "category", "date"]
@@ -727,72 +820,37 @@ struct CSVColumnMappingView: View {
     
     var body: some View {
         NavigationView {
-            VStack {
-                // Progress indicator
-                StepProgressView(currentStep: currentStep, totalSteps: 2)
-                    .padding()
+            ZStack {
+                // Background
+                backgroundColor
+                    .edgesIgnoringSafeArea(.all)
                 
-                // Header
-                Text(currentStep == 0 ? "Preview Your Data" : "Map Your Columns")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .padding(.bottom, 10)
-                
-                // Preview table or column mapping
-                if currentStep == 0 {
-                    previewTableView
-                } else {
-                    columnMappingView
-                }
-                
-                Spacer()
-                
-                // Navigation buttons
-                HStack {
-                    Button(action: {
-                        if currentStep > 0 {
-                            currentStep -= 1
-                        } else {
-                            isPresented = false
+                VStack(spacing: 0) {
+                    // Header with progress
+                    headerView
+                    
+                    // Main content
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            // Step indicator
+                            stepIndicatorView
+                                .padding(.top, 10)
+                            
+                            // Title and description
+                            titleView
+                            
+                            // Main content area
+                            contentView
                         }
-                    }) {
-                        HStack {
-                            Image(systemName: "chevron.left")
-                            Text(currentStep > 0 ? "Back" : "Cancel")
-                        }
-                        .foregroundColor(.primary)
-                        .padding()
-                        .background(Color.gray.opacity(0.2))
-                        .cornerRadius(10)
+                        .padding(.horizontal)
                     }
                     
-                    Spacer()
-                    
-                    Button(action: {
-                        if currentStep == 0 {
-                            currentStep += 1
-                        } else {
-                            processImport()
-                        }
-                    }) {
-                        HStack {
-                            Text(currentStep == 0 ? "Next" : "Import")
-                            Image(systemName: currentStep == 0 ? "chevron.right" : "square.and.arrow.down")
-                        }
-                        .foregroundColor(.white)
-                        .padding()
-                        .background(bluePurpleColor)
-                        .cornerRadius(10)
-                    }
-                    .disabled(currentStep == 1 && !areRequiredMappingsFilled())
+                    // Bottom navigation
+                    navigationButtons
                 }
-                .padding()
             }
             .navigationBarTitle("Import Transactions", displayMode: .inline)
-            .navigationBarItems(trailing: Button(action: { isPresented = false }) {
-                Image(systemName: "xmark.circle")
-                    .foregroundColor(.gray)
-            })
+            .navigationBarItems(leading: closeButton) // Changed from trailing to leading
             .onAppear {
                 if let csvData = csvData {
                     parseCSVHeaders(csvData)
@@ -800,7 +858,7 @@ struct CSVColumnMappingView: View {
             }
             .alert(isPresented: $showError) {
                 Alert(
-                    title: Text("Import Error"),
+                    title: Text("Import Alert"),
                     message: Text(errorMessage ?? "An unknown error occurred"),
                     dismissButton: .default(Text("OK"))
                 )
@@ -811,201 +869,429 @@ struct CSVColumnMappingView: View {
         }
     }
     
+    // MARK: - UI Components
+    
+    // Close button - now positioned on the left
+    private var closeButton: some View {
+        Button(action: { isPresented = false }) {
+            ZStack {
+                Circle()
+                    .fill(colorScheme == .dark ? Color.white.opacity(0.2) : Color.gray.opacity(0.2))
+                    .frame(width: 28, height: 28)
+                
+                Image(systemName: "xmark")
+                    .foregroundColor(colorScheme == .dark ? .white : .primary)
+                    .font(.system(size: 10, weight: .bold))
+            }
+            .padding(.leading, 2)
+          
+        }
+   
+    }
+    
+    // Header view with progress indicator
+    private var headerView: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(Color.clear)
+                .frame(height: 1)
+                .background(separatorColor)
+        }
+    }
+    
+    // Step indicator view
+    private var stepIndicatorView: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<2) { step in
+                Capsule()
+                    .fill(step == currentStep ? primaryColor : secondaryColor)
+                    .frame(height: 4)
+            }
+        }
+        .frame(width: 40)
+        .padding(.vertical, 10)
+    }
+    
+    // Title view with step-specific titles
+    private var titleView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(currentStep == 0 ? "Preview Your Data" : "Map Your Columns")
+                .font(.system(size: 28, weight: .bold))
+                .foregroundColor(textColor)
+            
+            Text(currentStep == 0 ?
+                "We found \(headers.count) columns and \(previewRows.count) rows." :
+                "Map your CSV columns to the appropriate transaction fields.")
+                .font(.system(size: 16))
+                .foregroundColor(subtextColor)
+                .padding(.bottom, 10)
+        }
+    }
+    
+    // Main content view - switches between preview and mapping
+    private var contentView: some View {
+        VStack {
+            if currentStep == 0 {
+                previewTableView
+            } else {
+                columnMappingView
+            }
+            
+            Spacer(minLength: 60)
+        }
+    }
+    
+    // Bottom navigation buttons
+    private var navigationButtons: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .background(separatorColor)
+            
+            HStack {
+                // Back button
+                Button(action: {
+                    if currentStep > 0 {
+                        currentStep -= 1
+                    } else {
+                        isPresented = false
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left")
+                        Text(currentStep > 0 ? "Back" : "Cancel")
+                    }
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(textColor)
+                    .padding(.vertical, 12)
+                }
+                
+                Spacer()
+                
+                // Next/Import button
+                Button(action: {
+                    if currentStep == 0 {
+                        currentStep += 1
+                    } else {
+                        isProcessing = true
+                        processImport()
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        if isProcessing {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                        } else {
+                            Text(currentStep == 0 ? "Next" : "Import")
+                            Image(systemName: currentStep == 0 ? "chevron.right" : "square.and.arrow.down")
+                        }
+                    }
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 120)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(areRequiredMappingsFilled() || currentStep == 0 ? primaryColor : Color.gray.opacity(0.3))
+                    )
+                }
+                .disabled((currentStep == 1 && !areRequiredMappingsFilled()) || isProcessing)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+            .background(backgroundColor)
+        }
+    }
+    
     // MARK: - Preview Table View
     private var previewTableView: some View {
-        VStack(alignment: .leading) {
-            Text("Here's a preview of your data:")
-                .font(.subheadline)
-                .padding(.horizontal)
-            
+        VStack(alignment: .leading, spacing: 8) {
             if previewRows.isEmpty {
-                Text("No data found in CSV file")
-                    .foregroundColor(.red)
-                    .padding()
+                emptyDataView
             } else {
-                ScrollView([.horizontal, .vertical]) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // Header row
-                        HStack(spacing: 0) {
-                            ForEach(headers, id: \.self) { header in
-                                Text(header)
-                                    .font(.caption)
-                                    .fontWeight(.bold)
-                                    .padding(8)
-                                    .frame(width: 120, alignment: .leading)
-                                    .background(Color.gray.opacity(0.2))
-                                    .border(Color.gray.opacity(0.5), width: 0.5)
-                            }
-                        }
-                        
-                        // Data rows (up to 6 rows)
-                        ForEach(0..<min(previewRows.count, 6), id: \.self) { rowIndex in
-                            HStack(spacing: 0) {
-                                ForEach(0..<min(previewRows[rowIndex].count, headers.count), id: \.self) { colIndex in
-                                    Text(previewRows[rowIndex][colIndex])
-                                        .font(.caption)
-                                        .padding(8)
-                                        .frame(width: 120, alignment: .leading)
-                                        .background(rowIndex % 2 == 0 ? Color.white : Color.gray.opacity(0.1))
-                                        .border(Color.gray.opacity(0.5), width: 0.5)
-                                }
-                            }
+                dataPreviewView
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(separatorColor, lineWidth: 1)
+                .background(RoundedRectangle(cornerRadius: 16).fill(backgroundColor))
+        )
+        .padding(.vertical, 8)
+    }
+    
+    private var emptyDataView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 40))
+                .foregroundColor(subtextColor)
+            
+            Text("No data found in CSV file")
+                .font(.headline)
+                .foregroundColor(subtextColor)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(40)
+    }
+    
+    private var dataPreviewView: some View {
+        ScrollView([.horizontal, .vertical]) {
+            VStack(alignment: .leading, spacing: 0) {
+                // Header row
+                HStack(spacing: 0) {
+                    ForEach(headers, id: \.self) { header in
+                        Text(header)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(primaryColor)
+                            .padding(.vertical, 10)
+                            .padding(.horizontal, 12)
+                            .frame(width: 140, alignment: .leading)
+                            .background(secondaryColor)
+                            .border(separatorColor, width: 0.5)
+                    }
+                }
+                
+                // Data rows (up to 6 rows)
+                ForEach(0..<min(previewRows.count, 6), id: \.self) { rowIndex in
+                    HStack(spacing: 0) {
+                        ForEach(0..<min(previewRows[rowIndex].count, headers.count), id: \.self) { colIndex in
+                            Text(previewRows[rowIndex][colIndex])
+                                .font(.system(size: 14))
+                                .foregroundColor(textColor)
+                                .padding(.vertical, 10)
+                                .padding(.horizontal, 12)
+                                .frame(width: 140, alignment: .leading)
+                                .background(rowIndex % 2 == 0 ?
+                                    (colorScheme == .dark ? Color(hex: "2C2C2E") : Color.white) :
+                                    (colorScheme == .dark ? Color(hex: "1C1C1E") : Color(UIColor.systemGray6)))
+                                .border(separatorColor, width: 0.5)
                         }
                     }
                 }
-                .padding(.horizontal)
             }
-            
-            Text("We detected \(headers.count) columns and \(previewRows.count) rows in your file.")
-                .font(.caption)
-                .foregroundColor(.gray)
-                .padding()
         }
+        .frame(height: 320)
+        .padding(3)
     }
     
     // MARK: - Column Mapping View
     private var columnMappingView: some View {
-        VStack(alignment: .leading) {
-            Text("Map each column to the appropriate field:")
-                .font(.subheadline)
-                .padding(.horizontal)
-            
-            ScrollView {
-                VStack(spacing: 16) {
-                    // Required fields
+        VStack(spacing: 16) {
+            // Required fields with header
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Required Fields")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(textColor)
+                    .padding(.leading, 4)
+                
+                VStack(spacing: 12) {
                     ForEach(requiredMappings, id: \.self) { field in
                         mappingRow(field: field, isRequired: true)
                     }
-                    
-                    // Optional fields
+                }
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(cardBackgroundColor)
+                        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.3 : 0.05), radius: 2, x: 0, y: 1)
+                )
+            }
+            
+            // Optional fields with header
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Optional Fields")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(textColor)
+                    .padding(.leading, 4)
+                    .padding(.top, 10)
+                
+                VStack(spacing: 12) {
                     ForEach(optionalMappings, id: \.self) { field in
                         mappingRow(field: field, isRequired: false)
                     }
                 }
-                .padding()
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(cardBackgroundColor)
+                        .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.3 : 0.05), radius: 2, x: 0, y: 1)
+                )
             }
         }
     }
     
     // Individual mapping row
     private func mappingRow(field: String, isRequired: Bool) -> some View {
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(field.capitalized)
-                    .fontWeight(.semibold)
+                Text(displayName(for: field))
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(textColor)
                 
                 if isRequired {
                     Text("*")
-                        .foregroundColor(.red)
-                        .fontWeight(.bold)
+                        .foregroundColor(accentColor)
+                        .font(.system(size: 16, weight: .bold))
                 } else {
                     Text("(optional)")
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                        .font(.system(size: 14))
+                        .foregroundColor(subtextColor)
                 }
+                
+                Spacer()
             }
             
             Button(action: {
                 selectedField = field
             }) {
                 HStack {
-                    Text(selectedHeaderName(for: field))
-                        .foregroundColor(.primary)
+                    if let index = columnMappings[field], index < headers.count {
+                        Text(headers[index])
+                            .foregroundColor(textColor)
+                    } else {
+                        Text(isRequired ? "Select a column" : "None (Skip)")
+                            .foregroundColor(isRequired ? subtextColor : textColor)
+                    }
                     
                     Spacer()
                     
-                    Image(systemName: "chevron.down")
-                        .foregroundColor(.gray)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(subtextColor)
                 }
-                .padding()
-                .background(Color.gray.opacity(0.1))
-                .cornerRadius(8)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(separatorColor, lineWidth: 1)
+                )
             }
             .disabled(headers.isEmpty)
             
+            // Preview of selected mapping
             if let index = columnMappings[field], index < previewRows.count && !previewRows.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Preview:")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    
-                    // Show up to 3 sample values from column
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(0..<min(3, previewRows.count), id: \.self) { rowIndex in
-                            if index < previewRows[rowIndex].count {
-                                Text("- \(previewRows[rowIndex][index])")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-                    .padding(.leading, 4)
-                }
-                .padding(.leading)
+                previewForMapping(columnIndex: index)
             }
         }
+    }
+    
+    // Preview display for a mapped column
+    private func previewForMapping(columnIndex: Int) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Preview:")
+                .font(.system(size: 14))
+                .foregroundColor(subtextColor)
+            
+            // Show up to 3 sample values from column
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(0..<min(3, previewRows.count), id: \.self) { rowIndex in
+                    if columnIndex < previewRows[rowIndex].count {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(primaryColor.opacity(0.2))
+                                .frame(width: 8, height: 8)
+                            
+                            Text(previewRows[rowIndex][columnIndex])
+                                .font(.system(size: 14))
+                                .foregroundColor(subtextColor)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+            .padding(.leading, 8)
+        }
+        .padding(.leading, 8)
+        .padding(.top, 4)
     }
     
     // Column selection sheet
     private func columnSelectionSheet(for field: String) -> some View {
         NavigationView {
             List {
-                ForEach(Array(headers.enumerated()), id: \.element) { index, header in
-                    Button(action: {
-                        columnMappings[field] = index
-                        selectedField = nil
-                    }) {
-                        VStack(alignment: .leading) {
-                            HStack {
-                                Text(header)
-                                    .fontWeight(columnMappings[field] == index ? .bold : .regular)
-                                
-                                Spacer()
-                                
-                                if columnMappings[field] == index {
-                                    Image(systemName: "checkmark")
-                                        .foregroundColor(bluePurpleColor)
-                                }
-                            }
-                            
-                            // Preview of values in this column
-                            if !previewRows.isEmpty {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    ForEach(0..<min(3, previewRows.count), id: \.self) { rowIndex in
-                                        if index < previewRows[rowIndex].count {
-                                            Text(previewRows[rowIndex][index])
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                    }
-                                }
-                                .padding(.leading, 8)
-                                .padding(.top, 2)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .foregroundColor(.primary)
-                }
-                
+                // None option for optional fields
                 if !requiredMappings.contains(field) {
                     Button(action: {
                         columnMappings[field] = nil
                         selectedField = nil
                     }) {
-                        Text("None")
-                            .foregroundColor(.gray)
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text("None (Skip this field)")
+                                    .foregroundColor(textColor)
+                            }
+                            
+                            Spacer()
+                            
+                            if columnMappings[field] == nil {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(primaryColor)
+                            }
+                        }
+                    }
+                }
+                
+                // Column options
+                ForEach(Array(headers.enumerated()), id: \.element) { index, header in
+                    Button(action: {
+                        columnMappings[field] = index
+                        selectedField = nil
+                    }) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(header)
+                                    .font(.system(size: 16, weight: columnMappings[field] == index ? .semibold : .regular))
+                                    .foregroundColor(textColor)
+                                
+                                Spacer()
+                                
+                                if columnMappings[field] == index {
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(primaryColor)
+                                }
+                            }
+                            
+                            // Preview of values
+                            if !previewRows.isEmpty {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    ForEach(0..<min(2, previewRows.count), id: \.self) { rowIndex in
+                                        if index < previewRows[rowIndex].count {
+                                            Text(previewRows[rowIndex][index])
+                                                .font(.system(size: 14))
+                                                .foregroundColor(subtextColor)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                }
+                                .padding(.top, 2)
+                            }
+                        }
+                        .padding(.vertical, 4)
                     }
                 }
             }
-            .navigationBarTitle("Select column for \(field.capitalized)", displayMode: .inline)
-            .navigationBarItems(trailing: Button("Cancel") {
+            .listStyle(InsetGroupedListStyle())
+            .navigationBarTitle("Select Column for \(displayName(for: field))", displayMode: .inline)
+            .navigationBarItems(trailing: Button("Done") {
                 selectedField = nil
             })
         }
     }
     
     // MARK: - Helper Methods
+    
+    // Convert field name to display name
+    private func displayName(for field: String) -> String {
+        switch field {
+        case "amount": return "Amount"
+        case "category": return "Category"
+        case "date": return "Date"
+        case "notes": return "Notes/Description"
+        case "type": return "Transaction Type"
+        case "icon": return "Icon"
+        case "recurrence": return "Recurrence"
+        default: return field.capitalized
+        }
+    }
     
     // Check if all required mappings are filled
     private func areRequiredMappingsFilled() -> Bool {
@@ -1015,14 +1301,6 @@ struct CSVColumnMappingView: View {
             }
         }
         return true
-    }
-    
-    // Get display name for currently selected header
-    private func selectedHeaderName(for field: String) -> String {
-        if let index = columnMappings[field], index < headers.count {
-            return headers[index]
-        }
-        return "Select a column"
     }
     
     // Parse CSV to get headers and preview rows
@@ -1075,11 +1353,13 @@ struct CSVColumnMappingView: View {
             let lowercaseHeader = header.lowercased()
             
             // Check for amount
-            if lowercaseHeader.contains("amount") || lowercaseHeader.contains("price") || lowercaseHeader.contains("sum") {
+            if lowercaseHeader.contains("amount") || lowercaseHeader.contains("price") ||
+               lowercaseHeader.contains("sum") || lowercaseHeader.contains("value") {
                 columnMappings["amount"] = index
             }
             // Check for category
-            else if lowercaseHeader.contains("category") || lowercaseHeader.contains("categ") {
+            else if lowercaseHeader.contains("category") || lowercaseHeader.contains("categ") ||
+                    lowercaseHeader.contains("type") && lowercaseHeader.contains("transaction") {
                 columnMappings["category"] = index
             }
             // Check for date
@@ -1087,19 +1367,23 @@ struct CSVColumnMappingView: View {
                 columnMappings["date"] = index
             }
             // Check for notes/description
-            else if lowercaseHeader.contains("note") || lowercaseHeader.contains("description") || lowercaseHeader.contains("memo") {
+            else if lowercaseHeader.contains("note") || lowercaseHeader.contains("description") ||
+                    lowercaseHeader.contains("memo") || lowercaseHeader.contains("details") {
                 columnMappings["notes"] = index
             }
             // Check for transaction type (income/expense)
-            else if lowercaseHeader.contains("type") && !columnMappings.values.contains(index) {
+            else if (lowercaseHeader.contains("type") && !lowercaseHeader.contains("transaction")) ||
+                     lowercaseHeader.contains("direction") {
                 columnMappings["type"] = index
             }
             // Check for icon
-            else if lowercaseHeader.contains("icon") || lowercaseHeader.contains("symbol") {
+            else if lowercaseHeader.contains("icon") || lowercaseHeader.contains("symbol") ||
+                    lowercaseHeader.contains("emoji") {
                 columnMappings["icon"] = index
             }
             // Check for recurrence
-            else if lowercaseHeader.contains("recur") || lowercaseHeader.contains("repeat") || lowercaseHeader.contains("frequency") {
+            else if lowercaseHeader.contains("recur") || lowercaseHeader.contains("repeat") ||
+                    lowercaseHeader.contains("frequency") || lowercaseHeader.contains("schedule") {
                 columnMappings["recurrence"] = index
             }
         }
@@ -1110,8 +1394,9 @@ struct CSVColumnMappingView: View {
         // Validate required mappings
         for field in requiredMappings {
             if columnMappings[field] == nil {
-                errorMessage = "Please select a column for \(field.capitalized)"
+                errorMessage = "Please select a column for \(displayName(for: field))"
                 showError = true
+                isProcessing = false
                 return
             }
         }
@@ -1119,28 +1404,32 @@ struct CSVColumnMappingView: View {
         guard let csvData = csvData else {
             errorMessage = "No CSV data available"
             showError = true
+            isProcessing = false
             return
         }
         
-        let result = parseTransactionsWithMappings(csvData)
-        
-        switch result {
-        case .success(let transactions):
-            if transactions.isEmpty {
-                errorMessage = "No valid transactions found in the CSV file"
-                showError = true
-            } else {
-                onComplete(transactions)
-                isPresented = false
+        // Introduce a small delay to show processing animation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let result = parseTransactionsWithMappings(csvData)
+            
+            switch result {
+            case .success(let transactions):
+                if transactions.isEmpty {
+                    self.errorMessage = "No valid transactions found in the CSV file"
+                    self.showError = true
+                } else {
+                    self.onComplete(transactions)
+                    self.isPresented = false
+                }
+            case .failure(let error):
+                self.errorMessage = error.localizedDescription
+                self.showError = true
             }
-        case .failure(let error):
-            errorMessage = error.localizedDescription
-            showError = true
+            self.isProcessing = false
         }
     }
     
-    // Inside your CSVColumnMappingView struct, replace the parseTransactionsWithMappings function with this improved version:
-
+    // Parse transactions based on column mappings
     private func parseTransactionsWithMappings(_ csvString: String) -> Result<[Transaction], Error> {
         let rows = csvString.components(separatedBy: .newlines)
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -1264,7 +1553,7 @@ struct CSVColumnMappingView: View {
                 }
             }
             
-            // Parse date - IMPROVED VERSION
+            // Parse date
             var date = Date()
             var dateParseSuccess = false
             
@@ -1322,6 +1611,7 @@ struct CSVColumnMappingView: View {
                 }
             }
             
+            
             // Parse recurrence
             var recurrence: Transaction.RecurrenceType = .oneTime
             if let recurrenceIndex = recurrenceIndex, recurrenceIndex < columns.count {
@@ -1349,17 +1639,48 @@ struct CSVColumnMappingView: View {
                     notes = noteText
                 }
             }
-            
-            // Parse icon or use default
-            var icon = "💵" // Default icon
+            func emojiFromName(_ name: String) -> String? {
+                let mapping: [String: String] = [
+                    "tshirt": "👕",
+                    "cpu": "🖥️",      // Changed from brain to computer
+                    "phone": "📱",
+                    "heart": "❤️",
+                    "car": "🚗",
+                    "cart": "🛒",
+                    "film": "🎬",
+                    "money": "💰",
+                    "chart": "📈",
+                    "note": "📝",
+                    "house": "🏠",
+                    "banknote": "💵",
+                    "food": "🍎",      // Changed from burger to apple
+                    "game": "🎮",
+                    "gift": "🎁"
+                ]
+                
+                return mapping[name.lowercased()]
+            }
+
+            var icon = "💵" // Always default
+
             if let iconIndex = iconIndex, iconIndex < columns.count {
                 let iconText = columns[iconIndex].trimmingCharacters(in: .whitespacesAndNewlines)
                 if !iconText.isEmpty {
-                    icon = iconText
+                    // If iconText is already an emoji (check first character Unicode range)
+                    if iconText.unicodeScalars.first?.properties.isEmojiPresentation == true {
+                        icon = iconText
+                    } else if let converted = emojiFromName(iconText) {
+                        icon = converted
+                    }
+                    // else icon stays default 💵
                 }
             } else {
-                // Generate icon based on category if none provided
-                icon = defaultIconForCategory(category)
+                icon = defaultIconForCategory(category) // fallback based on category (should also be emoji)
+                
+                // Just in case defaultIconForCategory returns something invalid, force default:
+                if icon.unicodeScalars.first?.properties.isEmojiPresentation != true {
+                    icon = "💵"
+                }
             }
             
             // Create transaction
@@ -1520,35 +1841,10 @@ struct CSVColumnMappingView: View {
         return (year, month, day)
     }
         
-        
-        // Helper function to get default icon based on category
-        private func defaultIconForCategory(_ category: String) -> String {
-            let lowercaseCategory = category.lowercased()
-            
-            if lowercaseCategory.contains("food") || lowercaseCategory.contains("grocer") || lowercaseCategory.contains("restaurant") {
-                return "🛒" // Shopping cart
-            } else if lowercaseCategory.contains("transport") || lowercaseCategory.contains("travel") || lowercaseCategory.contains("gas") {
-                return "🚗" // Car
-            } else if lowercaseCategory.contains("home") || lowercaseCategory.contains("rent") || lowercaseCategory.contains("mortgage") {
-                return "🏠" // House
-            } else if lowercaseCategory.contains("health") || lowercaseCategory.contains("medical") {
-                return "❤️" // Heart
-            } else if lowercaseCategory.contains("entertainment") || lowercaseCategory.contains("fun") {
-                return "🎬" // Clapperboard (Movie)
-            } else if lowercaseCategory.contains("income") || lowercaseCategory.contains("salary") {
-                return "💰" // Money bag
-            } else if lowercaseCategory.contains("saving") || lowercaseCategory.contains("invest") {
-                return "📈" // Upward chart
-            } else if lowercaseCategory.contains("bill") || lowercaseCategory.contains("utility") {
-                return "📝" // Note
-            } else if lowercaseCategory.contains("cloth") || lowercaseCategory.contains("shop") {
-                return "👕" // Clothing
-            } else if lowercaseCategory.contains("tech") || lowercaseCategory.contains("electr") {
-                return "📱" // Mobile phone
-            } else {
-                return "💵" // Default: Money
-            }
-        }
+    // Always returns the money emoji
+    private func defaultIconForCategory(_ category: String) -> String {
+        return "💵"
+    }
         
         // Error type for CSV parsing
         enum CSVParseError: Error, LocalizedError {
@@ -1597,6 +1893,7 @@ struct StepProgressView: View {
         .padding(.horizontal, 40)
     }
 }
+
 import SwiftUI
 import UIKit
 
@@ -1604,102 +1901,216 @@ struct DeleteAllConfirmationView: View {
     @Binding var deleteConfirmationText: String
     var confirmAction: () -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var showConfetti = false // 🎉 Easter egg state
-
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var showConfetti = false
+    @State private var isShaking = false
+    @State private var scale: CGFloat = 1.0
+    
+    // Custom colors
+    private let accentColor = Color("AccentColor", bundle: nil) // Uses asset catalog color
+    private let warningColor = Color(UIColor.systemRed)
+    
+    // Animation properties
+    @State private var animateWarning = false
+    @State private var buttonPressed = false
+    
     var body: some View {
         NavigationView {
-            VStack(spacing: 35) { // Increased spacing for a well-balanced layout
+            ZStack {
+                // Background with subtle gradient
+                LinearGradient(
+                    gradient: Gradient(colors: [
+                        colorScheme == .dark ? Color(UIColor.systemBackground) : Color(UIColor.systemGray6),
+                        colorScheme == .dark ? Color(UIColor.systemBackground) : Color.white
+                    ]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
                 
-                // ⚠️ Warning Icon
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 75, height: 75) // Slightly larger icon
-                    .foregroundColor(.red)
-                    .padding(.top, 20)
-                
-                // 🔴 Serious Header
-                Text("Confirm Deletion")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal, 40) // Keeps width natural
-                
-                // ⚠️ Warning Message
-                VStack(spacing: 12) { // Adds proper spacing
-                    Text("This action will **permanently delete** all transactions.")
-                        .multilineTextAlignment(.center)
-                        .font(.headline)
-                        .foregroundColor(.primary)
+                VStack(spacing: 25) {
+                    Spacer()
                     
-                    Text("Once deleted, your data **cannot be recovered**.")
+                    // Static, flat warning icon
+                    ZStack {
+                        Circle()
+                            .fill(warningColor.opacity(0.1))
+                            .frame(width: 150, height: 150)
+
+                        Circle()
+                            .stroke(warningColor.opacity(0.25), lineWidth: 6)
+                            .frame(width: 150, height: 150)
+
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 70)
+                            .foregroundColor(warningColor)
+                    }
+                    .padding(.bottom, 10)
+                    // Title with animation
+                    Text("Delete All Data?")
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
                         .multilineTextAlignment(.center)
-                        .foregroundColor(.red)
-                        .fontWeight(.semibold)
-                }
-                .padding(.horizontal, 45) // Expands but keeps it reasonable
-                
-                Divider()
-                    .padding(.horizontal, 50) // Slightly wider divider
-                
-                // 🛑 Explicit Confirmation Instruction
-                Text("Type **DELETE** below to confirm.")
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
-                
-                // 🔤 Input Field (Slightly Wider, but Not Stretched)
-                TextField("DELETE", text: $deleteConfirmationText)
-                    .padding()
-                    .frame(height: 50)
-                    .frame(maxWidth: 350) // Keeps width natural, not overly stretched
-                    .background(Color(UIColor.secondarySystemBackground))
-                    .cornerRadius(12)
-                    .multilineTextAlignment(.center)
-                    .autocapitalization(.none)
-                    .font(.headline)
-                    .onChange(of: deleteConfirmationText) { newText in
-                        if newText.lowercased() == "smartstashisthebest" {
-                            showConfetti = true
-                            ConfettiHelper.shared.showConfetti()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                showConfetti = false
+                        .padding(.horizontal, 20)
+                        .foregroundColor(colorScheme == .dark ? .white : .black)
+                    
+                    // Warning subtitle
+                    Text("This action cannot be undone. All your saved items will be permanently removed.")
+                        .font(.subheadline)
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 30)
+                        .padding(.bottom, 10)
+                    
+                    Spacer()
+                    
+                    // Text Field with animated styling
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Type DELETE to confirm")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.leading, 5)
+                        
+                        TextField("DELETE", text: $deleteConfirmationText)
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 56)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color(UIColor.systemGray6))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(
+                                                deleteConfirmationText.isEmpty ? Color.clear :
+                                                deleteConfirmationText == "DELETE" ? warningColor : Color.gray,
+                                                lineWidth: 2
+                                            )
+                                    )
+                            )
+                            .multilineTextAlignment(.center)
+                            .font(.system(size: 17, weight: .medium))
+                            .autocapitalization(.none)
+                            .overlay(
+                                HStack {
+                                    if !deleteConfirmationText.isEmpty {
+                                        Button(action: {
+                                            deleteConfirmationText = ""
+                                        }) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundColor(.secondary)
+                                                .padding(.trailing, 16)
+                                        }
+                                        .transition(.opacity)
+                                        .animation(.easeInOut, value: deleteConfirmationText.isEmpty)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            )
+                            .modifier(ShakeEffect(animatableData: isShaking ? 1 : 0))
+                            .onChange(of: deleteConfirmationText) { newText in
+                                if newText.lowercased() == "smartstashisthebest" {
+                                    showConfetti = true
+                                    ConfettiHelper.shared.showConfetti()
+                                    withAnimation(.spring()) {
+                                        scale = 1.05
+                                    }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                        withAnimation(.spring()) {
+                                            scale = 1.0
+                                        }
+                                    }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                        showConfetti = false
+                                    }
+                                }
+                            }
+                    }
+                    .padding(.horizontal, 24)
+                    
+                    // Delete Button with improved styling and animation
+                    Button(action: {
+                        if deleteConfirmationText == "DELETE" {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                buttonPressed = true
+                            }
+                            
+                            // Add haptic feedback
+                            let generator = UINotificationFeedbackGenerator()
+                            generator.notificationOccurred(.warning)
+                            
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                confirmAction()
+                                dismiss()
+                            }
+                        } else {
+                            withAnimation(.default) {
+                                isShaking = true
+                            }
+                            // Add haptic feedback for error
+                            let generator = UIImpactFeedbackGenerator(style: .medium)
+                            generator.impactOccurred()
+                            
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                isShaking = false
                             }
                         }
-                    }
-                
-                // ❌ Final Delete Button (Wider but Not Overly Stretched)
-                Button(action: {
-                    if deleteConfirmationText == "DELETE" {
-                        confirmAction()
-                        dismiss()
-                    }
-                }) {
-                    Text("Permanently Delete All Transactions")
-                        .fontWeight(.bold)
-                        .frame(maxWidth: 350) // Balanced width
-                        .frame(height: 50)
-                        .background(deleteConfirmationText == "DELETE" ? Color.red : Color.gray)
+                    }) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 16, weight: .semibold))
+                            Text("Delete All")
+                                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 18)
                         .foregroundColor(.white)
-                        .cornerRadius(12)
-                }
-                .disabled(deleteConfirmationText != "DELETE")
-                
-                Spacer()
-            }
-            .padding(.top, 50)
-            .padding(.bottom, 30)
-            .frame(maxWidth: 500) // Ensures nothing gets stretched too much
-            .background(Color(UIColor.systemGroupedBackground).edgesIgnoringSafeArea(.all))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
+                        .background(
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(deleteConfirmationText == "DELETE" ? warningColor : Color.gray.opacity(0.6))
+                                .shadow(
+                                    color: deleteConfirmationText == "DELETE" ? warningColor.opacity(0.4) : Color.clear,
+                                    radius: 8, x: 0, y: 4
+                                )
+                        )
+                        .scaleEffect(buttonPressed ? 0.95 : 1.0)
                     }
-                    .foregroundColor(.blue)
+                    .disabled(deleteConfirmationText != "DELETE")
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 20)
+                    
+                    
+                    // Cancel button with improved styling
+                    Button(action: {
+                        dismiss()
+                    }) {
+                        Text("Cancel")
+                            .font(.system(size: 17, weight: .medium, design: .rounded))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 18)
+                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color(UIColor.systemGray6))
+                            )
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 30)
                 }
+                .scaleEffect(scale)
             }
+            .navigationTitle("Delete All Data")
+            .navigationBarTitleDisplayMode(.inline)
         }
+    }
+}
+
+// Shake effect modifier
+struct ShakeEffect: GeometryEffect {
+    var animatableData: CGFloat
+    
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        ProjectionTransform(CGAffineTransform(translationX: 10 * sin(animatableData * .pi * 5), y: 0))
     }
 }
 import UIKit
