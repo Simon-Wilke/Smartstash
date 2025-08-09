@@ -4,12 +4,16 @@
 //
 //  Created by Simon Wilke on 3/2/25.
 //
-
 import SwiftUI
 import UniformTypeIdentifiers
+import UserNotifications
 
 struct SettingsView: View {
     @AppStorage("showChart") private var showChart: Bool = true
+    @AppStorage("pushNotificationsEnabled") private var pushNotificationsEnabled: Bool = false
+    @AppStorage("transactionReminderTime") private var transactionReminderTime: Double = Date().timeIntervalSince1970
+    @AppStorage("dailyRemindersEnabled") private var dailyRemindersEnabled: Bool = true
+    
     @Environment(\.colorScheme) var colorScheme
     @State private var showingImportSheet = false
     @State private var showingOnboarding = false
@@ -18,11 +22,14 @@ struct SettingsView: View {
     @State private var showImportSuccess = false
     @State private var importError: String?
     @State private var showImportError = false
+    @State private var notificationPermissionStatus: UNAuthorizationStatus = .notDetermined
+    @State private var showingNotificationSettings = false
+    
     @EnvironmentObject var budgetViewModel: BudgetViewModel
     @State private var showingCSVMapping = false
     @State private var showingDocumentPicker = false
     @State private var showingColumnMapping = false
-    
+
     @State private var showDeleteAllAlert = false
     @State private var showFinalDeleteWarning = false
     @State private var deleteConfirmationText = ""
@@ -30,78 +37,154 @@ struct SettingsView: View {
     @State private var hasShownDocumentPicker = false
     @State private var hasShownColumnMapping = false
     @State private var hasShownOnboarding = false
-    
+
     var body: some View {
-        List {
-            Section("Transaction Management") {
-                SettingsRow(icon: "square.and.arrow.down", color: .blue, title: "Import Transactions from CSV") {
-                    showingOnboarding = true
-                }
-                SettingsRow(icon: "square.and.arrow.up", color: .indigo, title: "Export Transactions to CSV") {
-                    exportCSV()
-                }
-            }
-            
-            Section("Display Options") {
-                HStack {
-                    IconBadge(icon: "chart.line.uptrend.xyaxis", color: .teal)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Show Trend Chart")
-                            .font(.system(size: 16, weight: .medium))
-                  
+        ScrollView {
+            VStack(spacing: 24) {
+                settingsGroup {
+                    Text("Data")
+                        .font(Font.custom("Sora-Bold", size: 16))
+                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 12)
+
+                    SettingsRow(icon: "square.and.arrow.down", color: .blue, title: "Import Transactions from CSV") {
+                        showingOnboarding = true
                     }
-                    Spacer()
-                    Toggle("", isOn: $showChart)
-                        .toggleStyle(SwitchToggleStyle(tint: .blue))
+
+                    SettingsRow(icon: "square.and.arrow.up", color: .indigo, title: "Export Transactions to CSV") {
+                        exportCSV()
+                    }
                 }
-                .padding(.vertical, 4)
-            }
-            
-            Section("Danger Zone") {
-                SettingsRow(icon: "trash.fill", color: .red, title: "Delete All Transactions", subtitle: "This action cannot be undone", titleColor: .red) {
-                    showDeleteAllAlert = true
-                    hasShownDeleteSheet = false
+
+                settingsGroup {
+                    Text("Preferences")
+                        .font(Font.custom("Sora-Bold", size: 16))
+                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 12)
+
+                    HStack {
+                        IconBadge(icon: "chart.line.uptrend.xyaxis", color: .teal)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show Trend Chart")
+                                .font(.system(size: 16, weight: .medium))
+                        }
+                        Spacer()
+                        Toggle("", isOn: $showChart)
+                            .toggleStyle(SwitchToggleStyle(tint: bluePurpleColor))
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    
+                    VStack(spacing: 0) {
+                        HStack {
+                            IconBadge(icon: "bell.badge", color: .red)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Push Notifications")
+                                    .font(.system(size: 16, weight: .medium))
+                                Text(notificationStatusText)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Toggle("", isOn: $pushNotificationsEnabled)
+                                .toggleStyle(SwitchToggleStyle(tint: bluePurpleColor))
+                                .onChange(of: pushNotificationsEnabled) { newValue in
+                                    Task {
+                                        await handleNotificationToggle(enabled: newValue)
+                                    }
+                                }
+                        }
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                        
+                        if pushNotificationsEnabled && notificationPermissionStatus == .authorized {
+                            Divider()
+                                .padding(.horizontal)
+                            
+                            Button(action: {
+                                showingNotificationSettings = true
+                            }) {
+                                HStack {
+                                    IconBadge(icon: "clock", color: .orange)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Reminder Settings")
+                                            .font(.system(size: 16, weight: .medium))
+                                        Text("Configure when to be reminded")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .foregroundColor(.primary)
+                        }
+                    }
                 }
-            }
-            
-            Section("Support & Legal") {
-                LinkRow(icon: "doc.text", color: .purple, title: "Terms of Service", subtitle: "Read our terms and conditions", url: "https://yourapp.com/terms")
-                LinkRow(icon: "lock.shield", color: .green, title: "Privacy Policy", subtitle: "How we protect your data", url: "https://yourapp.com/privacy")
-                SettingsRow(icon: "envelope", color: .orange, title: "Send Feedback", subtitle: "Help us improve the app") {
-                    sendFeedback()
+
+                settingsGroup {
+                    Text("Support")
+                        .font(Font.custom("Sora-Bold", size: 16))
+                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 12)
+
+                    LinkRow(icon: "envelope", color: .orange, title: "Send Feedback", subtitle: "Help us improve the app", url: "https://docs.google.com/forms/d/e/1FAIpQLSe37NDleJ6bh0Q_1SuwANpRS9PqWW2Yz78_mFBob0ubLLZtbw/viewform?usp=dialog")
                 }
-            }
-            
-            Section {
-                VStack(spacing: 8) {
-                    Image(systemName: "dollarsign.circle.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(.blue)
-                    Text("Smartstash Finance")
-                        .font(.system(size: 18, weight: .semibold))
-                    Text("Version 0.1.0")
-                        .font(.system(size: 13))
+
+                settingsGroup {
+                    Text("Account")
+                        .font(Font.custom("Sora-Bold", size: 16))
+                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 12)
+
+                    SettingsRow(icon: "trash.fill", color: .red, title: "Delete All Transactions", subtitle: "This action cannot be undone", titleColor: .red) {
+                        showDeleteAllAlert = true
+                        hasShownDeleteSheet = false
+                    }
+                }
+
+                VStack(spacing: 6) {
+                    Text("Made with ❤️ by Simon")
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.secondary)
-                    Text("© 2025 Smartstash Inc.")
-                        .font(.system(size: 11))
+                    
+                    Text("Product of the USA")
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.secondary)
+                    
+                    Text("Spotify, Amazon, Apple Music, Peloton, Netflix, and Disney+ logos are trademarks of their respective owners.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 20)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
+                .padding(.top, 32)
+
             }
-            .listRowBackground(Color.clear)
+            .padding()
         }
-        .listStyle(.insetGrouped)
-        .navigationTitle("Settings")
+        .background(colorScheme == .dark ? Color.black : Color.white)
+        .navigationTitle("More")
         .navigationBarTitleDisplayMode(.large)
-        
+        .task {
+            await checkNotificationPermissions()
+        }
         .onChange(of: importedCSVData) { newValue in
             guard let data = newValue, !data.isEmpty else { return }
             if !showingColumnMapping {
                 showingColumnMapping = true
             }
         }
-        
         .alert("Delete All Transactions?", isPresented: $showDeleteAllAlert) {
             Button("Yes, Continue", role: .destructive) {
                 showFinalDeleteWarning = true
@@ -110,7 +193,6 @@ struct SettingsView: View {
         } message: {
             Text("This action is **irreversible**. Are you absolutely sure?")
         }
-        
         .sheet(isPresented: $showFinalDeleteWarning, onDismiss: {
             hasShownDeleteSheet = true
         }) {
@@ -119,7 +201,6 @@ struct SettingsView: View {
                 confirmAction: deleteAllTransactions
             )
         }
-        
         .sheet(isPresented: $showingOnboarding, onDismiss: {
             hasShownOnboarding = true
         }) {
@@ -132,13 +213,11 @@ struct SettingsView: View {
                 }
             )
         }
-        
         .sheet(isPresented: $showingDocumentPicker, onDismiss: {
             hasShownDocumentPicker = true
         }) {
             DocumentPicker(csvData: $importedCSVData)
         }
-        
         .sheet(isPresented: $showingColumnMapping, onDismiss: {
             hasShownColumnMapping = true
         }) {
@@ -155,13 +234,21 @@ struct SettingsView: View {
                 }
             }
         }
-        
+        .sheet(isPresented: $showingNotificationSettings) {
+            NotificationSettingsView(
+                isPresented: $showingNotificationSettings,
+                reminderTime: Binding(
+                    get: { Date(timeIntervalSince1970: transactionReminderTime) },
+                    set: { transactionReminderTime = $0.timeIntervalSince1970 }
+                ),
+                dailyRemindersEnabled: $dailyRemindersEnabled
+            )
+        }
         .alert("Import Successful", isPresented: $showImportSuccess) {
             Button("OK", role: .cancel) { }
         } message: {
             Text("Successfully imported \(importedTransactions.count) transactions.")
         }
-        
         .alert("Import Failed", isPresented: $showImportError) {
             Button("OK", role: .cancel) { }
         } message: {
@@ -169,23 +256,77 @@ struct SettingsView: View {
         }
     }
     
+    // MARK: - Computed Properties
+    
+    private var notificationStatusText: String {
+        switch notificationPermissionStatus {
+        case .authorized:
+            return "Get reminders"
+        case .denied:
+            return "Enable in Settings to receive notifications"
+        case .notDetermined:
+            return "Enable notifications"
+        default:
+            return "Notification status unknown"
+        }
+    }
+    
+    // MARK: - Notification Methods
+    
+    private func checkNotificationPermissions() async {
+        notificationPermissionStatus = await NotificationManager.shared.checkPermissionStatus()
+    }
+    
+    private func handleNotificationToggle(enabled: Bool) async {
+        if enabled {
+            let granted = await NotificationManager.shared.requestPermission()
+            if granted {
+                notificationPermissionStatus = .authorized
+                // Schedule default reminder if daily reminders are enabled
+                if dailyRemindersEnabled {
+                    let reminderDate = Date(timeIntervalSince1970: transactionReminderTime)
+                    NotificationManager.shared.scheduleTransactionReminder(at: reminderDate, repeatDaily: true)
+                }
+            } else {
+                notificationPermissionStatus = .denied
+                pushNotificationsEnabled = false
+            }
+        } else {
+            NotificationManager.shared.cancelAllNotifications()
+        }
+    }
+
+    @ViewBuilder
+    private func settingsGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content()
+        }
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(colorScheme == .dark
+                    ? Color(white: 1.0, opacity: 0.1)
+                      : Color(UIColor.systemGray6).opacity(0.5)
+                )
+        )
+    }
+
     private func deleteAllTransactions() {
         budgetViewModel.transactions.removeAll()
         budgetViewModel.pendingTransactions.removeAll()
         budgetViewModel.saveTransactions()
         budgetViewModel.savePendingTransactions()
     }
-    
-    
+
     private func exportCSV() {
         let transactions = budgetViewModel.transactions
         guard !transactions.isEmpty else {
             print("⚠️ No transactions to export.")
             return
         }
-        
+
         var csvString = "Amount,Category,Date,Notes,Icon,Type\n"
-        
+
         for transaction in transactions {
             let amount = String(format: "%.2f", transaction.amount)
             let category = transaction.category
@@ -193,17 +334,17 @@ struct SettingsView: View {
             let notes = transaction.notes ?? ""
             let icon = transaction.icon
             let type = transaction.type.rawValue
-            
+
             let row = "\(amount),\(category),\(date),\"\(notes)\",\(icon),\(type)\n"
             csvString.append(row)
         }
-        
+
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("SmartstashTransactions.csv")
-        
+
         do {
             try csvString.write(to: fileURL, atomically: true, encoding: .utf8)
             print("✅ CSV file saved at: \(fileURL.path)")
-            
+
             let activityView = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
             if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
                 windowScene.windows.first?.rootViewController?.present(activityView, animated: true)
@@ -212,110 +353,100 @@ struct SettingsView: View {
             print("❌ Failed to save CSV file: \(error.localizedDescription)")
         }
     }
-    
-    
+
     private func formatDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
-    
-    
-    private func sendFeedback() {
-        let email = "support@smartstash.app"
-        let subject = "Feedback for SmartStash"
-        let body = "Hello, I would like to share my feedback about SmartStash..."
-        
-        let emailString = "mailto:\(email)?subject=\(subject)&body=\(body)"
-        if let emailURL = URL(string: emailString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!) {
-            UIApplication.shared.open(emailURL)
-        }
-    }
-    struct SettingsRow: View {
-        let icon: String
-        let color: Color
-        let title: String
-        let subtitle: String?
-        let titleColor: Color
-        let action: () -> Void
-        
-        init(icon: String, color: Color, title: String, subtitle: String? = nil, titleColor: Color = .primary, action: @escaping () -> Void) {
-            self.icon = icon
-            self.color = color
-            self.title = title
-            self.subtitle = subtitle
-            self.titleColor = titleColor
-            self.action = action
-        }
-        
-        var body: some View {
-            Button(action: action) {
-                HStack {
-                    IconBadge(icon: icon, color: color)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title)
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(titleColor)
-                        if let subtitle = subtitle {
-                            Text(subtitle)
-                                .font(.system(size: 13))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.secondary)
-                }
-                .padding(.vertical, 4)
-            }
-            .buttonStyle(PlainButtonStyle())
-        }
+}
+
+struct SettingsRow: View {
+    let icon: String
+    let color: Color
+    let title: String
+    let subtitle: String?
+    let titleColor: Color
+    let action: () -> Void
+
+    init(icon: String, color: Color, title: String, subtitle: String? = nil, titleColor: Color = .primary, action: @escaping () -> Void) {
+        self.icon = icon
+        self.color = color
+        self.title = title
+        self.subtitle = subtitle
+        self.titleColor = titleColor
+        self.action = action
     }
 
-    struct LinkRow: View {
-        let icon: String
-        let color: Color
-        let title: String
-        let subtitle: String
-        let url: String
-        
-        var body: some View {
-            Link(destination: URL(string: url)!) {
-                HStack {
-                    IconBadge(icon: icon, color: color)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title)
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.primary)
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                IconBadge(icon: icon, color: color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(titleColor)
+                    if let subtitle = subtitle {
                         Text(subtitle)
                             .font(.system(size: 13))
                             .foregroundColor(.secondary)
                     }
-                    Spacer()
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 12, weight: .medium))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+struct LinkRow: View {
+    let icon: String
+    let color: Color
+    let title: String
+    let subtitle: String
+    let url: String
+
+    var body: some View {
+        Link(destination: URL(string: url)!) {
+            HStack {
+                IconBadge(icon: icon, color: color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.primary)
+                    Text(subtitle)
+                        .font(.system(size: 13))
                         .foregroundColor(.secondary)
                 }
-                .padding(.vertical, 4)
+                Spacer()
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
             }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
         }
     }
-    
-    struct IconBadge: View {
-        let icon: String
-        let color: Color
-        
-        var body: some View {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(.white)
-                .frame(width: 28, height: 28)
-                .background(color.gradient)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-        }
-    }
+}
 
+struct IconBadge: View {
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        Image(systemName: icon)
+            .font(.system(size: 16, weight: .medium))
+            .foregroundColor(.white)
+            .frame(width: 28, height: 28)
+            .background(color.gradient)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
     
     enum CSVParseError: Error, LocalizedError {
         case emptyFile
@@ -529,7 +660,7 @@ struct SettingsView: View {
         columns.append(currentColumn)
         return columns
     }
-}
+
 
 
 // MARK: - Document Picker for CSV Import
@@ -1893,6 +2024,7 @@ struct StepProgressView: View {
         .padding(.horizontal, 40)
     }
 }
+// DeleteAllConfirmationView.swift
 
 import SwiftUI
 import UIKit
@@ -1902,110 +2034,52 @@ struct DeleteAllConfirmationView: View {
     var confirmAction: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @State private var showConfetti = false
     @State private var isShaking = false
-    @State private var scale: CGFloat = 1.0
-    
-    // Custom colors
-    private let accentColor = Color("AccentColor", bundle: nil) // Uses asset catalog color
-    private let warningColor = Color(UIColor.systemRed)
-    
-    // Animation properties
-    @State private var animateWarning = false
     @State private var buttonPressed = false
-    
+    @State private var showConfetti = false
+    @State private var scale: CGFloat = 1.0
+
     var body: some View {
         NavigationView {
-            ZStack {
-                // Background with subtle gradient
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        colorScheme == .dark ? Color(UIColor.systemBackground) : Color(UIColor.systemGray6),
-                        colorScheme == .dark ? Color(UIColor.systemBackground) : Color.white
-                    ]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-                
-                VStack(spacing: 25) {
+            VStack(spacing: 0) {
+                // Content container - upper part
+                VStack(spacing: 32) {
                     Spacer()
                     
-                    // Static, flat warning icon
-                    ZStack {
-                        Circle()
-                            .fill(warningColor.opacity(0.1))
-                            .frame(width: 150, height: 150)
-
-                        Circle()
-                            .stroke(warningColor.opacity(0.25), lineWidth: 6)
-                            .frame(width: 150, height: 150)
-
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(height: 70)
-                            .foregroundColor(warningColor)
+                    // Icon and title
+                    VStack(spacing: 16) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 42, weight: .medium))
+                            .foregroundColor(.red)
+                        
+                        Text("Delete All Data")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundColor(.primary)
                     }
-                    .padding(.bottom, 10)
-                    // Title with animation
-                    Text("Delete All Data?")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 20)
-                        .foregroundColor(colorScheme == .dark ? .white : .black)
                     
-                    // Warning subtitle
-                    Text("This action cannot be undone. All your saved items will be permanently removed.")
-                        .font(.subheadline)
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 30)
-                        .padding(.bottom, 10)
-                    
-                    Spacer()
-                    
-                    // Text Field with animated styling
-                    VStack(alignment: .leading, spacing: 10) {
+                    // Confirmation input
+                    VStack(spacing: 12) {
                         Text("Type DELETE to confirm")
-                            .font(.caption)
+                            .font(.system(size: 15, weight: .medium))
                             .foregroundColor(.secondary)
-                            .padding(.leading, 5)
                         
                         TextField("DELETE", text: $deleteConfirmationText)
-                            .padding()
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 56)
+                            .font(.system(size: 18, weight: .medium))
+                            .multilineTextAlignment(.center)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                            .padding(.vertical, 16)
+                            .padding(.horizontal, 20)
                             .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color(UIColor.systemGray6))
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(colorScheme == .dark ? Color(.systemGray6) : Color(.systemGray6))
                                     .overlay(
-                                        RoundedRectangle(cornerRadius: 16)
+                                        RoundedRectangle(cornerRadius: 12)
                                             .stroke(
-                                                deleteConfirmationText.isEmpty ? Color.clear :
-                                                deleteConfirmationText == "DELETE" ? warningColor : Color.gray,
+                                                deleteConfirmationText.uppercased() == "DELETE" ? Color.red : Color.clear,
                                                 lineWidth: 2
                                             )
                                     )
-                            )
-                            .multilineTextAlignment(.center)
-                            .font(.system(size: 17, weight: .medium))
-                            .autocapitalization(.none)
-                            .overlay(
-                                HStack {
-                                    if !deleteConfirmationText.isEmpty {
-                                        Button(action: {
-                                            deleteConfirmationText = ""
-                                        }) {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .foregroundColor(.secondary)
-                                                .padding(.trailing, 16)
-                                        }
-                                        .transition(.opacity)
-                                        .animation(.easeInOut, value: deleteConfirmationText.isEmpty)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .trailing)
                             )
                             .modifier(ShakeEffect(animatableData: isShaking ? 1 : 0))
                             .onChange(of: deleteConfirmationText) { newText in
@@ -2026,93 +2100,84 @@ struct DeleteAllConfirmationView: View {
                                 }
                             }
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 40)
                     
-                    // Delete Button with improved styling and animation
+                    Spacer()
+                }
+                .scaleEffect(scale)
+                
+                // Buttons at bottom - iOS standard positioning
+                VStack(spacing: 12) {
+                    // Delete button
                     Button(action: {
-                        if deleteConfirmationText == "DELETE" {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                buttonPressed = true
-                            }
-                            
-                            // Add haptic feedback
+                        if deleteConfirmationText.uppercased() == "DELETE" {
+                            withAnimation(.easeInOut(duration: 0.1)) { buttonPressed = true }
                             let generator = UINotificationFeedbackGenerator()
                             generator.notificationOccurred(.warning)
-                            
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                 confirmAction()
                                 dismiss()
                             }
                         } else {
-                            withAnimation(.default) {
-                                isShaking = true
-                            }
-                            // Add haptic feedback for error
+                            withAnimation(.default) { isShaking = true }
                             let generator = UIImpactFeedbackGenerator(style: .medium)
                             generator.impactOccurred()
-                            
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                isShaking = false
-                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { isShaking = false }
                         }
                     }) {
-                        HStack(spacing: 12) {
+                        HStack(spacing: 8) {
                             Image(systemName: "trash")
                                 .font(.system(size: 16, weight: .semibold))
                             Text("Delete All")
-                                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                                .font(.system(size: 17, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 18)
+                        .frame(height: 52)
                         .foregroundColor(.white)
                         .background(
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(deleteConfirmationText == "DELETE" ? warningColor : Color.gray.opacity(0.6))
-                                .shadow(
-                                    color: deleteConfirmationText == "DELETE" ? warningColor.opacity(0.4) : Color.clear,
-                                    radius: 8, x: 0, y: 4
-                                )
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(deleteConfirmationText.uppercased() == "DELETE" ? Color.red : Color.red.opacity(0.4))
                         )
-                        .scaleEffect(buttonPressed ? 0.95 : 1.0)
+                        .scaleEffect(buttonPressed ? 0.98 : 1.0)
                     }
-                    .disabled(deleteConfirmationText != "DELETE")
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 20)
+                    .disabled(deleteConfirmationText.uppercased() != "DELETE")
                     
-                    
-                    // Cancel button with improved styling
-                    Button(action: {
-                        dismiss()
-                    }) {
+                    // Cancel button
+                    Button(action: { dismiss() }) {
                         Text("Cancel")
-                            .font(.system(size: 17, weight: .medium, design: .rounded))
+                            .font(.system(size: 17, weight: .medium))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 18)
-                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                            .frame(height: 52)
+                            .foregroundColor(.primary)
                             .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color(UIColor.systemGray6))
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(colorScheme == .dark ? Color(.systemGray6) : Color(.systemGray5))
                             )
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 30)
                 }
-                .scaleEffect(scale)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 20) // Standard iOS bottom padding for safe area
             }
-            .navigationTitle("Delete All Data")
-            .navigationBarTitleDisplayMode(.inline)
+            .background(
+                Rectangle()
+                    .fill(colorScheme == .dark ? Color(.systemBackground) : Color(.systemBackground))
+            )
+            .navigationTitle("")
+            .navigationBarHidden(true)
         }
     }
 }
 
-// Shake effect modifier
+
+
 struct ShakeEffect: GeometryEffect {
     var animatableData: CGFloat
-    
+
     func effectValue(size: CGSize) -> ProjectionTransform {
-        ProjectionTransform(CGAffineTransform(translationX: 10 * sin(animatableData * .pi * 5), y: 0))
+        ProjectionTransform(CGAffineTransform(translationX: 10 * sin(animatableData * .pi * 10), y: 0))
     }
 }
+
 import UIKit
 
 class ConfettiHelper {

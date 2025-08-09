@@ -723,12 +723,13 @@ struct AllTransactionsView: View {
     
     private func simulateLoading() {
         isLoading = true
-        let shouldDelay = Double.random(in: 0...1) < 0.1 // 10% chance to delay
-        let randomDelay = shouldDelay ? Double.random(in: 4...10) : 0
+        let shouldDelay = Double.random(in: 0...1) < 0.05  // 5% chance to delay
+        let randomDelay = shouldDelay ? Double.random(in: 0.2...0.5) : 0
         DispatchQueue.main.asyncAfter(deadline: .now() + randomDelay) {
             isLoading = false
         }
     }
+
     
     private func colorForTransactionType(_ type: Transaction.TransactionType) -> Color {
         switch type {

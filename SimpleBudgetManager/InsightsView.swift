@@ -453,7 +453,9 @@ struct InsightsView: View {
                             let expense = item.balance < 0 ? abs(item.balance) : 0
                             return (day: item.day, date: item.date, income: income, expense: expense)
                         }
+                        
                     )
+                    .padding(.horizontal, -16) // negate parent VStack padding
 
                     InsightsButtonsSection(
                         buttons: summaryButtons,
@@ -574,14 +576,15 @@ struct InsightsView: View {
         ]
     }
 }
-// Now modify the InsightsButtonsSection to add a refresh button
 struct InsightsButtonsSection: View {
     let buttons: [SummaryButton]
     let onTapWeekly: () -> Void
     let onTapMonthly: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var storyManager: StoryManager
-    @State private var isRefreshing = false
+    
+    @State private var showAlert = false
+    @State private var alertMessage = ""
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -589,52 +592,39 @@ struct InsightsButtonsSection: View {
                 Text("Insights & Reports")
                     .font(.headline)
                     .foregroundColor(colorScheme == .dark ? .white : .black)
-                
                 Spacer()
-                
-                // Add refresh button
-                Button(action: {
-                    withAnimation {
-                        isRefreshing = true
-                    }
-                    
-                    // Regenerate stories
-                    storyManager.forceRegenerateStories()
-                    
-                    // Reset the refreshing state after a short delay
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                        withAnimation {
-                            isRefreshing = false
-                        }
-                    }
-                }) {
-                    Image(systemName: isRefreshing ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.triangle.2.circlepath.circle")
-                        .font(.title3)
-                        .foregroundColor(AppTheme.primary)
-                        .rotationEffect(isRefreshing ? .degrees(360) : .degrees(0))
-                        .animation(isRefreshing ? Animation.linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
-                }
             }
             
             VStack(spacing: 12) {
                 ForEach(buttons) { button in
                     Button(action: {
-                        if button.type == .weekly && storyManager.hasWeeklyStory() {
-                            onTapWeekly()
-                        } else if button.type == .monthly && storyManager.hasMonthlyStory() {
-                            onTapMonthly()
+                        if isButtonEnabled(for: button) {
+                            if button.type == .weekly {
+                                onTapWeekly()
+                            } else if button.type == .monthly {
+                                onTapMonthly()
+                            }
+                        } else {
+                            alertMessage = "Not enough data yet. Use the app a bit more to see this report."
+                            showAlert = true
                         }
                     }) {
                         InsightButton(button: button)
                             .opacity(isButtonEnabled(for: button) ? 1.0 : 0.5)
                     }
-                    .disabled(!isButtonEnabled(for: button))
+                    .disabled(false) // keep buttons tappable to show alert
                 }
             }
         }
+        .alert(isPresented: $showAlert) {
+            Alert(
+                title: Text("Report Unavailable"),
+                message: Text(alertMessage),
+                dismissButton: .default(Text("OK"))
+            )
+        }
     }
     
-    // Helper function to determine if a button should be enabled
     private func isButtonEnabled(for button: SummaryButton) -> Bool {
         if button.type == .weekly {
             return storyManager.hasWeeklyStory()
@@ -644,6 +634,7 @@ struct InsightsButtonsSection: View {
         return false
     }
 }
+
 extension StoryManager {
     // Force regenerate stories regardless of timing conditions
     func forceRegenerateStories() {
@@ -1419,7 +1410,7 @@ struct SimplifiedCategoryDetailView: View {
                                 .fill(colorScheme == .dark ? Color(UIColor.systemBackground) : Color.white)
                                 .frame(width: 210, height: 210)
                                 .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
-                                
+                            
                             // Content based on selection
                             if let selectedIndex = selectedCategoryIndex {
                                 let category = categories[selectedIndex]
@@ -1614,7 +1605,7 @@ struct SimplifiedCategoryDetailView: View {
                                     Text("$\(String(format: "%.2f", category.amount))")
                                         .font(.system(size: 18, weight: isSelected ? .bold : .semibold))
                                         .foregroundColor(isSelected ? getCategoryColor(at: originalIndex) :
-                                                        (colorScheme == .dark ? .white : .black))
+                                                            (colorScheme == .dark ? .white : .black))
                                         .opacity(animate ? 1 : 0)
                                         .animation(.easeIn(duration: 0.5).delay(0.2 + 0.05 * Double(index)), value: animate)
                                         .animation(.easeInOut(duration: 0.3), value: selectedCategoryIndex)
@@ -1625,10 +1616,10 @@ struct SimplifiedCategoryDetailView: View {
                                     RoundedRectangle(cornerRadius: 16)
                                         .fill(colorScheme == .dark ?
                                               Color(UIColor.secondarySystemBackground) :
-                                              Color.white)
+                                                Color.white)
                                         .shadow(color: isSelected ?
                                                 getCategoryColor(at: originalIndex).opacity(0.25) :
-                                                Color.black.opacity(0.05),
+                                                    Color.black.opacity(0.05),
                                                 radius: isSelected ? 10 : 5,
                                                 x: 0,
                                                 y: isSelected ? 5 : 2)
@@ -1667,7 +1658,7 @@ struct SimplifiedCategoryDetailView: View {
                         RoundedRectangle(cornerRadius: 24)
                             .fill(colorScheme == .dark ?
                                   Color(UIColor.systemBackground) :
-                                  Color(UIColor.secondarySystemBackground))
+                                    Color(UIColor.secondarySystemBackground))
                             .ignoresSafeArea(.all, edges: .bottom)
                     )
                 }
@@ -1675,35 +1666,7 @@ struct SimplifiedCategoryDetailView: View {
             }
         }
    
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
-                    Button(action: {
-                        // Export to PDF action
-                        shareReport()
-                    }) {
-                        Label("Export to PDF", systemImage: "doc.text")
-                    }
-                    
-                    Button(action: {
-                        // Share as image action
-                        shareAsImage()
-                    }) {
-                        Label("Share as Image", systemImage: "photo")
-                    }
-                    
-                    Button(action: {
-                        // Share data action
-                        shareData()
-                    }) {
-                        Label("Share Data", systemImage: "tablecells")
-                    }
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .foregroundColor(colorScheme == .dark ? .white : .black)
-                }
-            }
-        }
+       
         .onAppear {
             // Sequential animations for a more polished appearance
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -1800,10 +1763,13 @@ struct DailyBreakdownSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            // Title aligned like other section titles
             Text("Breakdown")
                 .font(.headline)
                 .foregroundColor(colorScheme == .dark ? .white : .black)
+                .padding(.horizontal, 16)  // same as other titles
 
+            // Scroll view for cards
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 20) {
                     ForEach(lastWeekData.indices, id: \.self) { index in
@@ -1817,12 +1783,17 @@ struct DailyBreakdownSection: View {
                     }
                     .padding(.vertical, 8)
                 }
+                // Here, add horizontal padding to inset cards just a bit,
+                // so cards start a bit inside but not fully padded like parent VStack.
+                .padding(.horizontal, 18)
             }
         }
     }
 }
 
-// MARK: - Modified DailyBreakdownCard
+
+
+// MARK: - Redesigned DailyBreakdownCard
 struct DailyBreakdownCard: View {
     let day: String
     let date: String
@@ -1832,82 +1803,122 @@ struct DailyBreakdownCard: View {
     @State private var isPressed = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(day)
-                        .font(.headline)
-                        .foregroundColor(colorScheme == .dark ? .white : .black)
-
-                    Text(date)
-                        .font(.caption)
-                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
-                }
-
-                Spacer()
-
-                Circle()
-                    .fill(AppTheme.primary.opacity(0.15))
-                    .frame(width: 36, height: 36)
-                    .overlay(
-                        Text(day.prefix(1))
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(AppTheme.primary)
-                    )
-            }
-
-            Divider()
-                .background(Color.gray.opacity(0.2))
-
-            VStack(spacing: 12) {
+        VStack(spacing: 0) {
+            // Header with gradient background
+            VStack(spacing: 8) {
                 HStack {
-                    Image(systemName: "arrow.up")
-                        .font(.caption2)
-                        .padding(6)
-                        .background(Color.green.opacity(0.15))
-                        .foregroundColor(.green)
-                        .cornerRadius(8)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(day)
+                            .font(.title3)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
 
-                    Text("Gained")
-                        .font(.caption)
-                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                        Text(date)
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.8))
+                    }
 
                     Spacer()
 
-                    Text("$\(String(format: "%.2f", income))")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.green)
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.white.opacity(0.2))
+                        .frame(width: 32, height: 32)
+                        .overlay(
+                            Text(day.prefix(1))
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.white)
+                        )
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+            }
+            .background(
+                LinearGradient(
+                    colors: [AppTheme.primary, AppTheme.primary.opacity(0.8)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+
+            // Content section
+            VStack(spacing: 14) {
+                // Income row
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.green.opacity(0.1))
+                        .frame(width: 28, height: 28)
+                        .overlay(
+                            Image(systemName: "plus")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.green)
+                        )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Income")
+                            .font(.caption)
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .secondary)
+                        
+                        Text("$\(String(format: "%.2f", income))")
+                            .font(.callout)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.green)
+                    }
+
+                    Spacer()
                 }
 
-                HStack {
-                    Image(systemName: "arrow.down")
-                        .font(.caption2)
-                        .padding(6)
-                        .background(Color.red.opacity(0.15))
-                        .foregroundColor(.red)
-                        .cornerRadius(8)
+                // Expense row
+                HStack(spacing: 12) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.red.opacity(0.1))
+                        .frame(width: 28, height: 28)
+                        .overlay(
+                            Image(systemName: "minus")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.red)
+                        )
 
-                    Text("Lost")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Expense")
+                            .font(.caption)
+                            .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .secondary)
+                        
+                        Text("$\(String(format: "%.2f", expense))")
+                            .font(.callout)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.red)
+                    }
+
+                    Spacer()
+                }
+
+                // Net total
+                Divider()
+                    .padding(.horizontal, -16)
+
+                HStack {
+                    Text("Net")
                         .font(.caption)
-                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .gray)
+                        .fontWeight(.medium)
+                        .foregroundColor(colorScheme == .dark ? .white.opacity(0.7) : .secondary)
 
                     Spacer()
 
-                    Text("$\(String(format: "%.2f", expense))")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.red)
+                    let netAmount = income - expense
+                    Text("$\(String(format: "%.2f", netAmount))")
+                        .font(.callout)
+                        .fontWeight(.bold)
+                        .foregroundColor(netAmount >= 0 ? .green : .red)
                 }
             }
+            .padding(16)
+            .background(colorScheme == .dark ? Color(UIColor.secondarySystemBackground) : Color.white)
         }
-        .padding()
-        .padding(.horizontal, 8)
-        .background(colorScheme == .dark ? Color(UIColor.secondarySystemBackground) : Color.white)
-        .cornerRadius(16)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
         .consistentShadow(intensity: isPressed ? .strong : .medium, isElevated: isPressed)
-        .scaleEffect(isPressed ? 0.98 : 1.0)
-        .animation(.spring(response: 0.3), value: isPressed)
+        .scaleEffect(isPressed ? 0.97 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isPressed)
         .onTapGesture {
             withAnimation {
                 isPressed = true
@@ -1928,7 +1939,6 @@ struct BreakdownData {
     let income: Double
     let expense: Double
 }
-
 struct InsightButton: View {
     let button: SummaryButton
     @Environment(\.colorScheme) private var colorScheme

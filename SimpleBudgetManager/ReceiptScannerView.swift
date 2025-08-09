@@ -140,28 +140,76 @@ class ReceiptOCRManager {
     }
     
     private func extractDateUsingDetector(from text: String) -> Date? {
+        print("🔍 === DATE EXTRACTION DEBUG (NSDataDetector) ===")
+        print("📝 Input text length: \(text.count) characters")
+        print("📝 Input text preview: \(String(text.prefix(200)))")
+        print("📝 Full text: \(text)")
+        
         do {
             let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue)
             let matches = detector.matches(in: text, options: [], range: NSRange(location: 0, length: text.utf16.count))
+            
+            print("📅 NSDataDetector found \(matches.count) potential date matches")
             
             let calendar = Calendar.current
             let now = Date()
             let threeYearsAgo = calendar.date(byAdding: .year, value: -3, to: now)!
             let oneMonthFromNow = calendar.date(byAdding: .month, value: 1, to: now)!
             
+            print("📅 Date validation range: \(threeYearsAgo) to \(oneMonthFromNow)")
+            
+            // Log all matches first
+            for (index, match) in matches.enumerated() {
+                let matchedText = (text as NSString).substring(with: match.range)
+                print("📅 Match \(index + 1): '\(matchedText)' at range \(match.range)")
+                
+                if let date = match.date {
+                    let formatter = DateFormatter()
+                    formatter.dateStyle = .medium
+                    formatter.timeStyle = .short
+                    print("📅   → Parsed as: \(formatter.string(from: date))")
+                    print("📅   → Raw date: \(date)")
+                    
+                    let isValid = date >= threeYearsAgo && date <= oneMonthFromNow
+                    print("📅   → Valid date range: \(isValid)")
+                    
+                    if !isValid {
+                        if date < threeYearsAgo {
+                            print("📅   → ❌ Too old (before \(threeYearsAgo))")
+                        } else if date > oneMonthFromNow {
+                            print("📅   → ❌ Too far in future (after \(oneMonthFromNow))")
+                        }
+                    }
+                } else {
+                    print("📅   → ❌ Could not parse as date")
+                }
+            }
+            
             // Find the most reasonable date
-            for match in matches {
-                guard let date = match.date else { continue }
+            for (index, match) in matches.enumerated() {
+                guard let date = match.date else {
+                    print("📅 Skipping match \(index + 1): no date object")
+                    continue
+                }
                 
                 // Filter out unreasonable dates
                 if date >= threeYearsAgo && date <= oneMonthFromNow {
+                    let matchedText = (text as NSString).substring(with: match.range)
+                    print("✅ SELECTED DATE: '\(matchedText)' → \(date)")
+                    print("🔍 === END DATE EXTRACTION DEBUG ===")
                     return date
+                } else {
+                    print("❌ Rejected match \(index + 1): date out of valid range")
                 }
             }
+            
+            print("❌ No valid dates found in range")
+            
         } catch {
-            print("NSDataDetector error: \(error)")
+            print("❌ NSDataDetector error: \(error)")
         }
         
+        print("🔍 === END DATE EXTRACTION DEBUG (No date found) ===")
         return nil
     }
     
@@ -376,8 +424,6 @@ class ReceiptOCRManager {
         }
     }
 }
-
-// Now update the ReceiptScannerView to use the OCR manager
 struct ReceiptScannerView: View {
     @StateObject var coordinator = TransactionCoordinator()
     @State private var showingCamera = false
@@ -390,7 +436,6 @@ struct ReceiptScannerView: View {
     @Binding var isPresented: Bool
     @State private var recognizedDate: Date? = nil
     
-    // Create OCR manager
     private let ocrManager = ReceiptOCRManager()
     
     var body: some View {
@@ -399,10 +444,28 @@ struct ReceiptScannerView: View {
                 Color(UIColor.systemBackground)
                     .ignoresSafeArea()
                 
-                VStack(spacing: 30) {
+                VStack(spacing: 20) {
+                    
+                    // Tasteful beta badge
+                    HStack {
+                        Spacer()
+                        Text("Early Beta – Feature in Development")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(
+                                bluePurpleColor.opacity(0.1)
+                            )
+                            .foregroundColor(bluePurpleColor)
+                            .cornerRadius(12)
+                        Spacer()
+                    }
+                    .padding(.top, 8)
+                    
                     Spacer()
                     
-                    // Receipt Preview Area
+                    // Receipt preview
                     if let scannedImage = scannedImage {
                         Image(uiImage: scannedImage)
                             .resizable()
@@ -434,12 +497,11 @@ struct ReceiptScannerView: View {
                     }
                     
                     Spacer()
-
-                    // 3D-themed Processing Indicator
+                    
+                    // Processing animation
                     if isProcessing {
                         VStack(spacing: 20) {
                             ZStack {
-                                // Main circular spinner
                                 Circle()
                                     .trim(from: 0, to: 0.75)
                                     .stroke(
@@ -461,7 +523,6 @@ struct ReceiptScannerView: View {
                                         value: animationTrigger
                                     )
                                 
-                                // Optional: Add a subtle pulsing center dot
                                 Circle()
                                     .fill(bluePurpleColor.opacity(0.6))
                                     .frame(width: 8, height: 8)
@@ -472,7 +533,7 @@ struct ReceiptScannerView: View {
                                         value: animationTrigger
                                     )
                             }
-                            .frame(height: 80) // Fixed container height for stability
+                            .frame(height: 80)
                             
                             Text("Processing receipt...")
                                 .font(.headline)
@@ -494,7 +555,8 @@ struct ReceiptScannerView: View {
                             animationTrigger = false
                         }
                     }
-                    // Scan Button
+                    
+                    // Scan button
                     Button(action: {
                         self.showingCamera = true
                     }) {
@@ -530,7 +592,6 @@ struct ReceiptScannerView: View {
                 CustomCameraView(image: $scannedImage, onImageCaptured: {
                     self.isProcessing = true
                     if let image = scannedImage {
-                        // Use enhanced OCR manager instead of the old method
                         processReceiptImage(image)
                     }
                 })
@@ -545,18 +606,17 @@ struct ReceiptScannerView: View {
                     }
                 )
             }
-
             .fullScreenCover(isPresented: $coordinator.shouldOpenTransactionEntry) {
                 ModifiedAddTransactionView(
                     viewModel: viewModel,
                     isPresented: $isPresented,
-                    prefilledAmount: coordinator.scannedAmount
+                    prefilledAmount: coordinator.scannedAmount,
+                    prefilledDate: coordinator.scannedDate
                 )
             }
         }
     }
     
-    // Updated method using the OCR Manager
     private func processReceiptImage(_ image: UIImage) {
         ocrManager.scanReceipt(from: image) { (extractedTotal, extractedDate, success) in
             self.recognizedTotal = extractedTotal
@@ -566,6 +626,7 @@ struct ReceiptScannerView: View {
         }
     }
 }
+
 struct ResultsView: View {
     @Binding var recognizedTotal: String?
     @Binding var recognizedDate: Date?
@@ -819,11 +880,12 @@ struct ResultsView: View {
 
 
 
-// Modified Transaction Entry View that accepts a prefilled amount
+// Modified Transaction Entry View that accepts both prefilled amount AND date
 struct ModifiedAddTransactionView: View {
     @ObservedObject var viewModel: BudgetViewModel
     @Binding var isPresented: Bool
     var prefilledAmount: Double?
+    var prefilledDate: Date?  // ✅ Add date parameter
 
     @State private var amount: String = ""
     @State private var category: String = ""
@@ -883,10 +945,11 @@ struct ModifiedAddTransactionView: View {
         return amount.isEmpty || amount == "0" || amount == "$0.00"
     }
     
-    init(viewModel: BudgetViewModel, isPresented: Binding<Bool>, prefilledAmount: Double?) {
+    init(viewModel: BudgetViewModel, isPresented: Binding<Bool>, prefilledAmount: Double?, prefilledDate: Date? = nil) {
         self.viewModel = viewModel
         self._isPresented = isPresented
         self.prefilledAmount = prefilledAmount
+        self.prefilledDate = prefilledDate
         
         // Initialize the amount field with the scanned value if provided
         if let prefilled = prefilledAmount {
@@ -899,18 +962,57 @@ struct ModifiedAddTransactionView: View {
                 _amount = State(initialValue: formattedAmount)
             }
         }
+        
+        // ✅ Initialize the date with scanned value if provided
+        if let prefilled = prefilledDate {
+            _selectedDate = State(initialValue: prefilled)
+        }
     }
 
     var body: some View {
         VStack(spacing: 0) {
+            // ✅ Update header to show scanned date if available
             TransactionHeaderView(
-                title: "Add Transaction",
+                title: prefilledDate != nil ? "Scanned Transaction" : "Add Transaction",
                 onClose: { isPresented = false },
                 onDateTap: { isDatePickerPresented.toggle() }
             )
             
             TransactionTypeSelector(selectedType: $type)
                 .padding(.top, -70)
+            
+            // ✅ Add visual indicator if data was scanned from receipt
+            if prefilledAmount != nil || prefilledDate != nil {
+                HStack {
+                    Image(systemName: "doc.text.viewfinder")
+                        .foregroundColor(bluePurpleColor)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Data from Receipt")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(bluePurpleColor)
+                        HStack {
+                            if prefilledAmount != nil {
+                                Text("Amount: ✓")
+                                    .font(.caption2)
+                                    .foregroundColor(.green)
+                            }
+                            if prefilledDate != nil {
+                                Text("Date: ✓")
+                                    .font(.caption2)
+                                    .foregroundColor(.green)
+                            }
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 40)
+                .padding(.vertical, 8)
+                .background(bluePurpleColor.opacity(0.1))
+                .cornerRadius(8)
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+            }
             
             // Amount Input Section
             HStack {
@@ -934,7 +1036,7 @@ struct ModifiedAddTransactionView: View {
                         .animation(.interpolatingSpring(stiffness: 120, damping: 5), value: keyframeBounce)
                 }
             }
-            .padding(.top, 50)
+            .padding(.top, prefilledAmount != nil || prefilledDate != nil ? 30 : 50)
             .padding(.bottom, 70)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.trailing, 10)
@@ -1018,7 +1120,7 @@ struct ModifiedAddTransactionView: View {
                             recurrence: recurrence,
                             notes: notes.isEmpty ? nil : notes,
                             icon: selectedIcon,
-                            date: selectedDate
+                            date: selectedDate  // ✅ Uses the selectedDate (which can be from receipt)
                         )
                         
                         viewModel.addTransaction(transaction)
@@ -1039,6 +1141,11 @@ struct ModifiedAddTransactionView: View {
             // Convert the prefilled amount to the proper format when the view appears
             if let prefilled = prefilledAmount {
                 amount = String(format: "%.2f", prefilled)
+            }
+            
+            // ✅ Set the date if it was scanned from receipt
+            if let prefilled = prefilledDate {
+                selectedDate = prefilled
             }
         }
         
@@ -1070,11 +1177,20 @@ struct ModifiedAddTransactionView: View {
                             Spacer()
                         }
                         .padding(.leading, 1) // Align to left
-                        // Title
-                        Text("Select Date & Time")
-                            .font(.system(size: 18, weight: .semibold, design: .rounded))
-                            .foregroundColor(Color(UIColor.label)) // Adapts to Light/Dark Mode
-                            .padding(.vertical, -50)
+                        
+                        // Title - show if date was scanned
+                        VStack(spacing: 4) {
+                            Text("Select Date & Time")
+                                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                .foregroundColor(Color(UIColor.label))
+                            
+                            if prefilledDate != nil {
+                                Text("Receipt date: \(prefilledDate!.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.vertical, -50)
                         
                         // Graphical Date & Time Picker
                         DatePicker(

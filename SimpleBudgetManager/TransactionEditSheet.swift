@@ -24,22 +24,27 @@ struct TransactionEditSheet: View {
         case thisAndFuture
     }
     
+    // Currency formatter
+    private var currencyFormatter: NumberFormatter {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD" // Change to your preferred currency
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        return formatter
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             // Header
             HStack {
                 Button(action: { dismiss() }) {
-                    ZStack {
-                        Circle()
-                            .fill(colorScheme == .dark ? Color.white.opacity(0.2) : Color.gray.opacity(0.2))
-                            .frame(width: 28, height: 28)
-                        
-                        Image(systemName: "xmark")
-                            .foregroundColor(colorScheme == .dark ? .white : .primary)
-                            .font(.system(size: 12, weight: .bold))
-                    }
-                    .padding(8)
+                    Text("Cancel")
+                        .foregroundColor(colorScheme == .dark ? .white : .gray)
+                        .fontWeight(.semibold)
                 }
+                .padding(8)
+                
                 
                 Spacer()
                 
@@ -76,7 +81,7 @@ struct TransactionEditSheet: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                         
-                        TextField("Enter amount", value: $transaction.amount, formatter: NumberFormatter())
+                        TextField("Enter amount", value: $transaction.amount, formatter: currencyFormatter)
                             .keyboardType(.decimalPad)
                             .padding()
                             .background(Color.gray.opacity(0.1))

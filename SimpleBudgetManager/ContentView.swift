@@ -1068,7 +1068,7 @@ struct TransactionListView: View {
                         } else {
                             HStack(spacing: 6) {
                                 Circle()
-                                    .fill(Color.primaryBluePurple.opacity(colorScheme == .dark ? 1.0 : 0.2))
+                                    .fill(Color.primaryBluePurple.opacity(colorScheme == .dark ? 1.0 : 1.0))
                                     .frame(width: 8, height: 8)
                                 
                                 Text("\(upcomingTransactions.count) transactions in next \(calculateUpcomingWindow()) days")
@@ -1176,7 +1176,7 @@ struct TransactionListView: View {
             isLoadingMore = true
             
             // Simulate network delay (remove this in production)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 paginationLimit += 50 // Load 50 more transactions
                 isLoadingMore = false
             }
@@ -1204,12 +1204,13 @@ struct TransactionListView: View {
 
     private func simulateLoading() {
         isLoading = true
-        let shouldDelay = Double.random(in: 0...1) < 0.1 // 10% chance to delay
-        let randomDelay = shouldDelay ? Double.random(in: 4...8) : 0
+        let shouldDelay = Double.random(in: 0...1) < 0.05  // 5% chance to delay
+        let randomDelay = shouldDelay ? Double.random(in: 0.2...0.5) : 0
         DispatchQueue.main.asyncAfter(deadline: .now() + randomDelay) {
             isLoading = false
         }
     }
+
 
     private func colorForTransactionType(_ type: Transaction.TransactionType) -> Color {
         switch type {
@@ -1490,7 +1491,7 @@ struct EmptyTransactionsView: View {
     var body: some View {
         VStack(spacing: 20) {
             // Placeholder Icon with enhanced design
-            Image(systemName: "tray.fill")
+            Image(systemName: "dollarsign.gauge.chart.lefthalf.righthalf")
                 .resizable()
                 .scaledToFit()
                 .frame(width: 100, height: 100) // Increased size for better visibility
@@ -1687,7 +1688,10 @@ struct TransactionTypeSelector: View {
                         if selectedType == type {
                             // Use the blue colors in a linear gradient like the plus button
                             LinearGradient(
-                                gradient: Gradient(colors: [bluePurpleColor, deepBlueColor]),
+                                gradient: Gradient(colors: [
+                                    Color(red: 140/255, green: 160/255, blue: 255/255),
+                                    Color(red: 90/255, green: 85/255, blue: 255/255)
+                                ]),
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
@@ -1808,7 +1812,7 @@ struct IconSelectorView: View {
         "💵", "🍎", "☕", "🎉", "🏠", "🎁", "💳", "🛒", "👟", "🚗",
         "🏦", "💡", "📱", "🧳", "🍽️", "🚕", "🏋️‍♀️", "🛏️", "📚",
         "🖥️", "🎮", "💍", "🐶", "🐱", "🐰",
-        "spotify_logo", "amazon_logo", "apple_music_logo", "peletonlogo_logo", "netflix_logo", "adobecloud_logo", "newdisney_logo"
+        "spotify_logo", "amazon_logo", "apple_music_logo", "peletonlogo_logo", "netflix_logo", "newdisney_logo"
     ]
     
     var body: some View {
@@ -2329,11 +2333,11 @@ struct TactileButtonStyle: ButtonStyle {
             }
     }
 }
-
 import SwiftUI
 
 struct ContentView: View {
     @StateObject private var budgetViewModel = BudgetViewModel()
+    @EnvironmentObject var deepLinkHandler: DeepLinkHandler // Shared deep link handler
     @State private var selectedTab = 0
     @State private var showingAddTransaction = false
     @State private var showingWeeklyStory = false
@@ -2343,9 +2347,8 @@ struct ContentView: View {
     @State private var deletedTransaction: Transaction?
     @State private var showingAllTransactionsView = false
     @Environment(\.colorScheme) var colorScheme
-    @State private var showOnboarding = !UserDefaults.standard.bool(forKey: "hasSeenOnboarding") // Checks if onboarding is needed
-    
-    //Floating Action Button Additions
+    @State private var showOnboarding = !UserDefaults.standard.bool(forKey: "hasSeenOnboarding")
+
     private let childButtonColor = Color(red: 0.6, green: 0.5, blue: 0.9)
     @State private var isLongPressing = false
     @State private var showingChildButton = false
@@ -2353,13 +2356,12 @@ struct ContentView: View {
     @State private var showingReceiptScanner = false
     @State private var offset = CGSize.zero
     @State private var childButtonHighlighted = false
-    
 
     var body: some View {
         ZStack {
             if showOnboarding {
                 OnboardingView {
-                    UserDefaults.standard.set(true, forKey: "hasSeenOnboarding") // Mark onboarding as seen
+                    UserDefaults.standard.set(true, forKey: "hasSeenOnboarding")
                     showOnboarding = false
                 }
             } else {
@@ -2375,13 +2377,13 @@ struct ContentView: View {
                                 .padding(.leading, 32)
                                 .padding(.trailing, 230)
                                 .padding(.bottom, -200)
-                            
+
                             FinancialSummaryView(
                                 viewModel: budgetViewModel,
                                 selectedTimePeriod: $selectedTimePeriod
                             )
                             .padding(.vertical, -8)
-                            
+
                             TransactionListView(
                                 viewModel: budgetViewModel,
                                 selectedTimePeriod: $selectedTimePeriod,
@@ -2391,18 +2393,13 @@ struct ContentView: View {
                             )
                             .padding(.vertical, -4)
                         }
-                        .navigationBarItems(
-                            trailing: HStack(spacing: 0) {
-                                timePeriodMenu
-                            }
-                        )
+                        .navigationBarItems(trailing: HStack(spacing: 0) { timePeriodMenu })
                     }
                     .tabItem {
-                        Label("Overview", systemImage: "dollarsign.bank.building.fill")
+                        Label("Overview", systemImage: "dollarsign.bank.building")
                     }
                     .tag(0)
-                    
-                    // Goals Tab
+
                     NavigationView {
                         FinancialGoalsView()
                     }
@@ -2410,8 +2407,7 @@ struct ContentView: View {
                         Label("Goals", systemImage: "trophy.fill")
                     }
                     .tag(1)
-                    
-              
+
                     NavigationView {
                         InsightsView(viewModel: budgetViewModel)
                     }
@@ -2419,45 +2415,63 @@ struct ContentView: View {
                         Label("Insights", systemImage: "chart.pie.fill")
                     }
                     .tag(2)
-                    
-                    // Settings Tab
+
                     NavigationView {
                         SettingsView()
-                            .environmentObject(BudgetViewModel())
+                            .environmentObject(budgetViewModel)
                     }
                     .tabItem {
                         Label("More", systemImage: "line.horizontal.3")
                     }
                     .tag(3)
                 }
-                
                 .accentColor(bluePurpleColor)
-                .fullScreenCover(isPresented: $showingAddTransaction) {
+
+                .fullScreenCover(isPresented: Binding(
+                    get: { showingAddTransaction || deepLinkHandler.shouldPresentAddTransaction },
+                    set: { newValue in
+                        showingAddTransaction = newValue
+                        if !newValue { deepLinkHandler.shouldPresentAddTransaction = false }
+                    }
+                )) {
                     AddTransactionView(
                         viewModel: budgetViewModel,
-                        isPresented: $showingAddTransaction
+                        isPresented: Binding(
+                            get: { showingAddTransaction || deepLinkHandler.shouldPresentAddTransaction },
+                            set: { newValue in
+                                showingAddTransaction = newValue
+                                if !newValue { deepLinkHandler.shouldPresentAddTransaction = false }
+                            }
+                        )
                     )
-                    .edgesIgnoringSafeArea(.all)
                 }
+
                 .fullScreenCover(isPresented: $showingAllTransactionsView) {
                     AllTransactionsView(viewModel: budgetViewModel, isPresented: $showingAllTransactionsView)
                 }
                 .fullScreenCover(isPresented: $showingWeeklyStory) {
                     WeeklyStoryView(stories: generateWeeklyStories(), showStories: $showingWeeklyStory)
                 }
-                
-                //Floating Action Button is only appearing on the overview page now
+
                 if selectedTab == 0 {
                     floatingActionButton
                 }
                 deletionNotificationView
             }
         }
-        
         .sheet(isPresented: $showingReceiptScanner) {
             ReceiptScannerView(viewModel: budgetViewModel, isPresented: $showingReceiptScanner)
         }
+        .onAppear {
+            UIApplication.shared.applicationIconBadgeNumber = 0
+        }
+        .onChange(of: deepLinkHandler.activeTab) { newTab in
+            selectedTab = newTab
+        }
     }
+
+
+
 
 
     
@@ -2585,9 +2599,12 @@ struct ContentView: View {
                             .padding()
                             .background(
                                 LinearGradient(
-                                    gradient: Gradient(colors: [bluePurpleColor, deepBlueColor]),
-                                    startPoint: .top,
-                                    endPoint: .bottom
+                                    gradient: Gradient(colors: [
+                                        Color(red: 140/255, green: 160/255, blue: 255/255),
+                                        Color(red: 70/255, green: 50/255, blue: 255/255)
+                                    ]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
                                 )
                             )
                             .clipShape(Circle())
@@ -2868,6 +2885,7 @@ let deepBlueColor = Color(red: 78/255, green: 87/255, blue: 255/255)
 
 #Preview {
     ContentView()
+        .environmentObject(DeepLinkHandler())
 }
 
 extension Color {
